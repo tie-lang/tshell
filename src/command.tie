@@ -1,0 +1,307 @@
+type tie<logic>
+import "./sh_util.tie"
+import "./backend_interp.tie"
+// src/command.tie —— 命令模块（L1）：解析（tie→内建→外部）+ 内建命令集 + 纠错
+// --------------------------------------------------------------
+// 解析优先级（架构 §4）：① tie 表达式 → ② 内建命令（短一致命名）→ ③ 外部命令
+// → ④ 拼写纠错（did-you-mean）。本模块只实现「命令语义」；求值与管道交给
+// repl/pipeline；外部命令经 exec_output（Windows 经 cmd /c 取回输出）。
+//
+// EN: command module — parsing priority (tie expr → builtin → external →
+// did-you-mean), a compact builtin command set, and misspelling correction.
+//
+// 状态（文件顶层全局，供本命名空间函数裸名访问）：虚拟 cwd / 退出标志。
+
+var g_cwd: string = ""
+var g_exit: bool = false
+
+namespace command {
+
+// 内建命令名注册表（顺序即帮助顺序）。
+func builtin_names() -> table<string> {
+    var t = table_new_string()
+    table_push(t, "cd")
+    table_push(t, "pwd")
+    table_push(t, "ls")
+    table_push(t, "cat")
+    table_push(t, "echo")
+    table_push(t, "mv")
+    table_push(t, "cp")
+    table_push(t, "rm")
+    table_push(t, "set")
+    table_push(t, "source")
+    table_push(t, "exec")
+    table_push(t, "history")
+    table_push(t, "help")
+    table_push(t, "exit")
+    return t
+}
+
+// 判断 tok 是否为内建命令。
+pub func c_is_builtin(tok: string) -> bool {
+    var names = builtin_names()
+    for n in names {
+        if n == tok {
+            return true
+        }
+    }
+    return false
+}
+
+// 设置退出标志（exit 命令 / REPL :quit 触发）。
+pub func req_exit() {
+    g_exit = true
+}
+
+// 读取退出标志。
+pub func ex_req() -> bool {
+    return g_exit
+}
+
+// 主入口：按 tokens 分派内建命令，返回输出文本。未知命令返回 "?"。
+pub func c_exec(toks: table<string>) -> string {
+    if sh_util.u_len(toks) == 0 {
+        return ""
+    }
+    var cmd = toks[0]
+    var args = sub_toks(toks)
+    if cmd == "cd" {
+        return cmd_cd(args)
+    }
+    if cmd == "pwd" {
+        return cwd_norm(g_cwd)
+    }
+    if cmd == "ls" {
+        return cmd_ls(args)
+    }
+    if cmd == "cat" {
+        return cmd_cat(args)
+    }
+    if cmd == "echo" {
+        return sh_util.u_join(args, " ")
+    }
+    if cmd == "exit" {
+        g_exit = true
+        return ""
+    }
+    if cmd == "help" {
+        return cmd_help()
+    }
+    if cmd == "mv" {
+        return cmd_fs("move", args)
+    }
+    if cmd == "cp" {
+        return cmd_fs("copy", args)
+    }
+    if cmd == "rm" {
+        return cmd_fs("del", args)
+    }
+    if cmd == "source" {
+        return cmd_source(args)
+    }
+    if cmd == "history" {
+        return "" // 由 session 模块提供（p.9.3.2）
+    }
+    if cmd == "set" {
+        return cmd_set(args)
+    }
+    if cmd == "exec" {
+        return run_external(sh_util.u_join(args, " "))
+    }
+    return "?"
+}
+
+func cmd_set(args: table<string>) -> string {
+    if sh_util.u_len(args) < 2 {
+        return "set <NAME> <VALUE>"
+    }
+    set_env(args[0], args[1])
+    return ""
+}
+
+func cmd_help() -> string {
+    return "内建命令: cd pwd ls cat echo mv cp rm set source exec history help exit"
+}
+
+func cmd_cd(args: table<string>) -> string {
+    var dest = cwd_norm(g_cwd)
+    if sh_util.u_len(args) > 0 {
+        dest = join_cwd(dest, args[0])
+    }
+    if !file_is_dir(dest) {
+        return "cd: no such directory: " + dest
+    }
+    g_cwd = dest
+    return ""
+}
+
+func cmd_ls(args: table<string>) -> string {
+    var dir = cwd_norm(g_cwd)
+    if sh_util.u_len(args) > 0 {
+        dir = join_cwd(dir, args[0])
+    }
+    var cols = table_new_string()
+    var entries = list_dir(dir)
+    for e in entries {
+        if e != "." && e != ".." {
+            table_push(cols, e)
+        }
+    }
+    return sh_util.u_join(cols, "\n")
+}
+
+func cmd_cat(args: table<string>) -> string {
+    if sh_util.u_len(args) < 1 {
+        return "cat <file>"
+    }
+    var path = join_cwd(cwd_norm(g_cwd), args[0])
+    if !file_exists(path) {
+        return "cat: no such file: " + args[0]
+    }
+    return file_read(path)
+}
+
+// mv/cp/rm：经外部 cmd move/copy/del（带 cwd 前缀）。
+func cmd_fs(op: string, args: table<string>) -> string {
+    if sh_util.u_len(args) < 2 && op != "del" {
+        return op + " <src> <dst>"
+    }
+    var cmdline = op + " \"" + join_cwd(cwd_norm(g_cwd), args[0]) + "\""
+    if sh_util.u_len(args) >= 2 {
+        cmdline = cmdline + " \"" + join_cwd(cwd_norm(g_cwd), args[1]) + "\""
+    }
+    return sh_util.u_trim(run_in_dir(cmdline))
+}
+
+func cmd_source(args: table<string>) -> string {
+    if sh_util.u_len(args) < 1 {
+        return "source <file.tie>"
+    }
+    var path = join_cwd(cwd_norm(g_cwd), args[0])
+    if !file_exists(path) {
+        return "source: no such file: " + args[0]
+    }
+    return backend_interp.b_eval(file_read(path))
+}
+
+// ---- 外部命令 ----
+pub func run_external(cmdline: string) -> string {
+    return sh_util.u_trim(run_in_dir(cmdline))
+}
+
+func run_in_dir(cmdline: string) -> string {
+    var base = cwd_norm(g_cwd)
+    var prefix = ""
+    if base != "" {
+        prefix = "cd /d \"" + base + "\" && "
+    }
+    return exec_output(prefix + cmdline)
+}
+
+// ---- did-you-mean（朴素编辑距离）----
+pub func c_did_you_mean(word: string) -> string {
+    var names = builtin_names()
+    var best = ""
+    var bestd: i64 = 99
+    for n in names {
+        if n == word {
+            continue
+        }
+        var d = edit_dist(word, n)
+        if d < bestd {
+            bestd = d
+            best = n
+        }
+    }
+    if bestd <= 2 {
+        return best
+    }
+    return ""
+}
+
+func edit_dist(a: string, b: string) -> i64 {
+    var an = str_len(a)
+    var bn = str_len(b)
+    var i: i64 = 0
+    var j: i64 = 0
+    var cost: i64 = 0
+    while i < an && j < bn {
+        if str_char(a, i) == str_char(b, j) {
+            i = i + 1
+            j = j + 1
+        } else {
+            cost = cost + 1
+            i = i + 1
+            j = j + 1
+        }
+    }
+    if i < an { cost = cost + (an - i) }
+    if j < bn { cost = cost + (bn - j) }
+    return cost
+}
+
+// ---- 路径工具 ----
+func cwd_norm(cwd: string) -> string {
+    if cwd == "" {
+        return cwd_or_dot()
+    }
+    return cwd
+}
+
+func cwd_or_dot() -> string {
+    var w = cwd()
+    if w == "" {
+        return "."
+    }
+    return w
+}
+
+func join_cwd(base: string, rel: string) -> string {
+    if rel == "" {
+        return base
+    }
+    if is_abs(rel) {
+        return rel
+    }
+    if base == "." || base == "" {
+        return rel
+    }
+    var bn = str_len(base)
+    var lastc = str_char(base, bn - 1)
+    if lastc == "/" || lastc == "\\" {
+        return base + rel
+    }
+    return base + "/" + rel
+}
+
+func is_abs(p: string) -> bool {
+    var n = str_len(p)
+    if n == 0 { return false }
+    var c0 = str_char(p, 0)
+    if c0 == "/" || c0 == "\\" {
+        return true
+    }
+    if n >= 2 && str_char(p, 0) >= "A" && str_char(p, 0) <= "Z" && str_char(p, 1) == ":" {
+        return true
+    }
+    if n >= 2 && str_char(p, 0) >= "a" && str_char(p, 0) <= "z" && str_char(p, 1) == ":" {
+        return true
+    }
+    return false
+}
+
+// tokens 去掉首元素（参数视图）。
+func sub_toks(toks: table<string>) -> table<string> {
+    var out = table_new_string()
+    var first = true
+    for x in toks {
+        if first {
+            first = false
+        } else {
+            table_push(out, x)
+        }
+    }
+    return out
+}
+
+}   // namespace command

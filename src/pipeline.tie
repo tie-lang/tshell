@@ -1,0 +1,179 @@
+type tie<logic>
+import "./sh_util.tie"
+import "./command.tie"
+import "./backend_interp.tie"
+// src/pipeline.tie —— 值管道模块（L1）：`cmd1 | cmd2` tie 值传递
+// --------------------------------------------------------------
+// 管道**传值不传文本**（架构 §5）：左侧命令产出值（标量文本/结构化行表），作为
+// 右侧输入。同进程机内直传；跨进程由 srv 层 zd 帧。实用限定（L0–L1）：左侧→文本
+// 行集；`count`/`filter`/`parse` 等谓词管段用 tie 表达式消费行流。
+//
+// EN: value pipeline — cmd1 | cmd2 passing tie values (not raw text). Left side
+// yields a value fed as input to the right side.
+
+namespace pipeline {
+
+// 管道入口：按 '|' 拆管段，逐段执行，末段渲染。
+pub func p_run(pipeline: string) -> string {
+    var segs = split_pipe(pipeline)
+    var total = sh_util.u_len(segs)
+    if total == 0 {
+        return ""
+    }
+    var acc = table_new_string()
+    var idx: i64 = 0
+    for seg in segs {
+        var trimmed = sh_util.u_trim(seg)
+        if idx == total - 1 {
+            if total == 1 {
+                return exec_segment(trimmed, table_new_string())
+            }
+            return exec_segment(trimmed, acc)
+        }
+        var outrows = direct_rows(trimmed)
+        var rows = sh_util.u_lines(outrows)
+        for r in rows {
+            table_push(acc, r)
+        }
+        idx = idx + 1
+    }
+    return ""
+}
+
+// 直接执行一段命令（无输入），返回其输出文本。
+func direct_rows(seg: string) -> string {
+    var toks = sh_util.u_split_ws(seg)
+    if sh_util.u_len(toks) == 0 {
+        return ""
+    }
+    var head = toks[0]
+    if head == "filter" || head == "count" || head == "parse" {
+        return ""
+    }
+    return exec_single(toks)
+}
+
+// 执行单个命令段（toks），返回输出文本：tie 表达式 → 内建 → 外部。
+pub func exec_single(toks: table<string>) -> string {
+    var cmd = toks[0]
+    if looks_like_expr(cmd) {
+        var src = sh_util.u_join(toks, " ")
+        return backend_interp.b_eval(src)
+    }
+    if command.c_is_builtin(cmd) {
+        return command.c_exec(toks)
+    }
+    return command.run_external(sh_util.u_join(toks, " "))
+}
+
+// 执行末段：输入行集合交给末段命令；count/filter/parse 谓词，否则单命令执行。
+func exec_segment(seg: string, inp: table<string>) -> string {
+    var toks = sh_util.u_split_ws(seg)
+    if sh_util.u_len(toks) == 0 {
+        return ""
+    }
+    var head = toks[0]
+    if head == "count" {
+        return to_string(sh_util.u_len(inp))
+    }
+    if head == "filter" {
+        return filter_rows(inp, toks)
+    }
+    if head == "parse" {
+        return sh_util.u_join(inp, "\n")
+    }
+    return exec_single(toks)
+}
+
+// filter 谓词式管段：`| filter { $x.size > 1024 }` —— 逐行绑定 `x` 后 eval 谓词体，
+// 真则保留。
+func filter_rows(inp: table<string>, toks: table<string>) -> string {
+    var body = ""
+    var bn: i64 = 0
+    for t in toks {
+        if bn == 0 {
+            bn = bn + 1
+            continue
+        }
+        body = body + " " + t
+        bn = bn + 1
+    }
+    body = strip_braces(sh_util.u_trim(body))
+    var out = table_new_string()
+    for line in inp {
+        backend_interp.b_eval("var x = \"" + escape_q(line) + "\"")
+        var res = sh_util.u_trim(backend_interp.b_eval(body))
+        if res == "true" {
+            table_push(out, line)
+        }
+    }
+    return sh_util.u_join(out, "\n")
+}
+
+// 去掉谓词体两端的 { }（若存在）。
+func strip_braces(s: string) -> string {
+    var n = str_len(s)
+    var lo: i64 = 0
+    var hi: i64 = n
+    if n >= 2 && str_char(s, 0) == "{" {
+        lo = 1
+    }
+    if n >= 2 && str_char(s, n - 1) == "}" {
+        hi = n - 1
+    }
+    return sh_util.u_trim(sh_util.u_sub(s, lo, hi))
+}
+
+func escape_q(s: string) -> string {
+    var out = ""
+    var n = str_len(s)
+    var i: i64 = 0
+    while i < n {
+        var c = str_char(s, i)
+        if c == "\"" {
+            out = out + "\\\""
+        } else if c == "\\" {
+            out = out + "\\\\"
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// 首词是否像 tie 表达式（含常见运算符/括号）。
+func looks_like_expr(cmd: string) -> bool {
+    if sh_util.u_contains(cmd, "+") || sh_util.u_contains(cmd, "*") ||
+       sh_util.u_contains(cmd, "/") || sh_util.u_contains(cmd, "(") {
+        return true
+    }
+    return false
+}
+
+// 按 '|' 拆管道段（引号内的 | 不拆）。
+func split_pipe(s: string) -> table<string> {
+    var out = table_new_string()
+    var cur = ""
+    var n = str_len(s)
+    var q = ""
+    var i: i64 = 0
+    while i < n {
+        var c = str_char(s, i)
+        if q == "" && (c == "\"" || c == "'") {
+            q = c
+        } else if q != "" && c == q {
+            q = ""
+        } else if c == "|" && q == "" {
+            table_push(out, cur)
+            cur = ""
+        } else {
+            cur = cur + c
+        }
+        i = i + 1
+    }
+    table_push(out, cur)
+    return out
+}
+
+}   // namespace pipeline
