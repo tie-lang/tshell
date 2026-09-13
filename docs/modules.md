@@ -49,5 +49,5 @@ srv ← { zd, repl, sh_util }
 | ---- | ---- |
 | `tests/probe_l2.tie` | lineedit / complete / session（ALL PASS） |
 | `tests/probe_zd.tie` | zd 帧编解码（CRC 向量 / 往返 / 篡改 / 多帧） |
-| `tests/smoke_stdio.ps1` | `--stdio` 帧往返（1+2→3） |
+| `tests/smoke_stdio.tsh.tie` | `--stdio` 帧往返（1+2→3；tsh 驱动） |
 | `tests/demo_script.tie` | 脚本运行时（shebang / 内建函数式调用） |

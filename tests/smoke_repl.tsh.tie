@@ -1,0 +1,67 @@
+type tie<tsh>
+// smoke_repl.tsh.tie —— tshell standalone REPL smoke test; tie/tsh port of
+// tests/smoke_repl.ps1 (p.9.3.1/2). Drives the interactive REPL by piping
+// input lines into a fresh tsh_main.exe, then asserts on the captured output
+// (prompt + result share a line; substring checks).
+// NOTE(tsh):
+//  - the '|' char cannot appear on a tsh line (interp dispatches any line
+//    containing '|' to the value-pipeline), so the pipe char is obtained at
+//    runtime from `powershell [char]124` (external tool, same use-class as
+//    the exec_code/exec_output bridging the tpkg probes).
+//  - no substring/contains is wired into the interp, so per-line assertions
+//    shell out to findstr (cmd intrinsic) over the captured output file.
+//  - conditional `exit <n>` is not expressible (bare exit unusable inside
+//    control blocks; exit(N) unwired): the script prints PASS/FAIL and a
+//    summary, and returns 0 (failure exit code is a documented deviation).
+// Run from the tshell repo root (REPL cwd == repo root, so `ls` lists src).
+var fails = 0
+var root = cwd()
+var tmp = get_env("TEMP")
+var inF = path_join(tmp, "tsh_repl_in.bin")
+var outF = path_join(tmp, "tsh_repl_out.bin")
+var pipe = exec_output("powershell -NoProfile -Command \"Write-Host -NoNewline ([char]124)\"")
+var inp = "echo warmup\n1+2\nvar sx = 21\nsx * 2\necho hi-there\nlssp\nls " + pipe + " count\nls " + pipe + " filter { str_len(x) > 2 }\nexit\n"
+var w1 = file_write(inF, inp)
+var rcrun = exec_code("cd /d \"" + root + "\" && src\\tsh_main.exe < \"" + inF + "\" > \"" + outF + "\" 2>&1")
+// 1) expression 1+2 -> 3 (match "tie> 3", reject "tie> 30")
+var c1a = exec_code("findstr /C:\"tie> 3\" \"" + outF + "\" >nul")
+var c1b = exec_code("findstr /C:\"tie> 30\" \"" + outF + "\" >nul")
+var p1 = 1
+if c1a != 0 { p1 = 0 }
+if c1b == 0 { p1 = 0 }
+if p1 == 1 { println("PASS: expression 1+2 -> 3") } else { println("FAIL: expression 1+2 -> 3") }
+if p1 == 0 { fails = fails + 1 }
+// 2) session var persisting sx*2 -> 42
+var c2 = exec_code("findstr /C:\"tie> 42\" \"" + outF + "\" >nul")
+var p2 = 0
+if c2 == 0 { p2 = 1 }
+if p2 == 1 { println("PASS: session var persisting sx*2 -> 42") } else { println("FAIL: session var persisting sx*2 -> 42") }
+if p2 == 0 { fails = fails + 1 }
+// 3) builtin echo
+var c3 = exec_code("findstr /C:\"hi-there\" \"" + outF + "\" >nul")
+var p3 = 0
+if c3 == 0 { p3 = 1 }
+if p3 == 1 { println("PASS: builtin echo") } else { println("FAIL: builtin echo") }
+if p3 == 0 { fails = fails + 1 }
+// 4) did-you-mean for misspelled 'lssp'
+var c4 = exec_code("findstr /C:\"did you mean 'ls'\" \"" + outF + "\" >nul")
+var p4 = 0
+if c4 == 0 { p4 = 1 }
+if p4 == 1 { println("PASS: did-you-mean for 'lssp'") } else { println("FAIL: did-you-mean for 'lssp'") }
+if p4 == 0 { fails = fails + 1 }
+// 5) value pipeline `ls | count` -> "tie> <n>" (regex digit after prompt)
+var c5 = exec_code("findstr /R /C:\"tie> [0-9]\" \"" + outF + "\" >nul")
+var p5 = 0
+if c5 == 0 { p5 = 1 }
+if p5 == 1 { println("PASS: value pipeline ls " + pipe + " count") } else { println("FAIL: value pipeline ls " + pipe + " count") }
+if p5 == 0 { fails = fails + 1 }
+// 6) filter predicate pipe lists repo entries including "src"
+var c6 = exec_code("findstr /C:\"src\" \"" + outF + "\" >nul")
+var p6 = 0
+if c6 == 0 { p6 = 1 }
+if p6 == 1 { println("PASS: filter predicate pipe") } else { println("FAIL: filter predicate pipe") }
+if p6 == 0 { fails = fails + 1 }
+// summary
+var fstr = to_string(fails)
+if fails == 0 { println("REPL: ALL PASS") } else { println("REPL FAILURES: " + fstr) }
+exit 0

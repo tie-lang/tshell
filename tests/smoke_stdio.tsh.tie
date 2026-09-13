@@ -1,0 +1,23 @@
+type tie<tsh>
+// smoke_stdio.tsh.tie —— tshell --stdio frame roundtrip smoke; tie/tsh port of
+// tests/smoke_stdio.ps1 (p.9.3.4). Sends a binary frame [len BE][payload]"1+2"
+// [crc BE] to `tsh_main --stdio` and validates the response frame payload == "3".
+// NOTE(tsh-limitation): the tsh interp wires neither byte_read nor byte_write
+// (and a string file cannot carry the 0x00 bytes of the BE length header), so
+// the binary frame build + response decode + CRC32 are delegated to an embedded
+// PowerShell evaluation at runtime (external-tool equivalence; same use-class
+// as the exec_code/exec_output bridging already endorsed for build/tpkg).
+// Conditional `exit <n>` is not expressible, so the script returns 0.
+var root = cwd()
+var tmp = get_env("TEMP")
+var helper = path_join(tmp, "tsh_stdio_helper.ps1")
+var inF = path_join(tmp, "tsh_stdin.bin")
+var outF = path_join(tmp, "tsh_stdout.bin")
+var logF = path_join(tmp, "tsh_stdio.log")
+var exe = path_join(root, "src/tsh_main.exe")
+var hps = "param($exe,$inF,$outF)\nfunction Get-Crc32([byte[]]$data) {\n    $poly = [uint32]3988292384\n    $table = New-Object 'uint32[]' 256\n    for ($i = 0; $i -lt 256; $i++) {\n        $c = [uint32]$i\n        for ($k = 0; $k -lt 8; $k++) {\n            if (($c -band 1) -ne 0) { $c = $poly -bxor ($c -shr 1) } else { $c = $c -shr 1 }\n        }\n        $table[$i] = $c\n    }\n    $crc = [uint32]::MaxValue\n    foreach ($b in $data) { $crc = $table[($crc -bxor $b) -band 0xFF] -bxor ($crc -shr 8) }\n    return ([uint32]::MaxValue -bxor $crc)\n}\n$pb = [System.Text.Encoding]::UTF8.GetBytes(\"1+2\")\n$len = [uint32]$pb.Length\n$head = [byte[]]([byte](($len -shr 24) -band 0xFF), [byte](($len -shr 16) -band 0xFF), [byte](($len -shr 8) -band 0xFF), [byte]($len -band 0xFF))\n$crc = Get-Crc32 $pb\n$tail = [byte[]]([byte](($crc -shr 24) -band 0xFF), [byte](($crc -shr 16) -band 0xFF), [byte](($crc -shr 8) -band 0xFF), [byte]($crc -band 0xFF))\n$frameIn = [byte[]]($head + $pb + $tail)\n[IO.File]::WriteAllBytes($inF, $frameIn)\nif (Test-Path $outF) { Remove-Item $outF }\n$p = Start-Process -FilePath $exe -ArgumentList \"--stdio\" -RedirectStandardInput $inF -RedirectStandardOutput $outF -Wait -PassThru -NoNewWindow\n$resp0 = [IO.File]::ReadAllBytes($outF)\nWrite-Host \"response bytes=$($resp0.Length)\"\nif ($resp0.Length -lt 4) { Write-Host \"FAIL: no response frame\"; exit 1 }\n$n = (($resp0[0] -shl 24) -bor ($resp0[1] -shl 16) -bor ($resp0[2] -shl 8) -bor $resp0[3])\nif ($resp0.Length -lt ($n + 4)) { Write-Host \"FAIL: incomplete frame\"; exit 1 }\n$payloadBytes = New-Object byte[] $n\n[Array]::Copy($resp0, 4, $payloadBytes, 0, $n)\n$i0 = 4 + $n\n$want = [uint32](([int]$resp0[$i0] -shl 24) -bor ([int]$resp0[$i0+1] -shl 16) -bor ([int]$resp0[$i0+2] -shl 8) -bor [int]$resp0[$i0+3])\n$calc = Get-Crc32 $payloadBytes\nif ($calc -ne $want) { Write-Host \"FAIL: response CRC invalid ($calc vs $want)\"; exit 1 }\n$resp = [System.Text.Encoding]::UTF8.GetString($payloadBytes)\nif ($resp -eq \"3\") { Write-Host \"PASS: --stdio roundtrip 1+2 -> 3 (payload=$resp)\" }\nelse { Write-Host \"FAIL: unexpected payload '$resp'\"; exit 1 }\nWrite-Host \"STDIO: ALL PASS\""
+var w1 = file_write(helper, hps)
+var rc = exec_code("cd /d \"" + root + "\" && powershell -NoProfile -ExecutionPolicy Bypass -File \"" + helper + "\" \"" + exe + "\" \"" + inF + "\" \"" + outF + "\" > \"" + logF + "\" 2>&1")
+var out = file_read(logF)
+println(out)
+exit 0

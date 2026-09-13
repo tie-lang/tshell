@@ -28,7 +28,9 @@ tshell 核心用 **tie 语言**编写，REPL 求值内核**复用 tiec 自举解
 
 ```powershell
 # 一次构建两装配（standalone + tedit 终端模组子集）
-powershell -File build.ps1
+# build.tsh.tie 是 tsh 角色自举构建驱动（tie/tsh 改写自 build.ps1）：
+# 须用独立装配实例运行（构建会重写 src\tsh_main.exe，不可用其自身实例）
+src\tsh_main.exe -f build.tsh.tie
 # 或直接用 tiec 编译装配入口（--no-cache 强制重编）
 ..\tiec\compiler\tiec.exe --no-cache src\tsh_main.tie
 ```
@@ -68,7 +70,8 @@ REPL 解析优先级（架构 §4）：**tie 表达式 → 内建命令 → 外�
 
 - `src/` tshell 模块源码（tie 语言）；`src/tsh_main.tie` 装配器/入口，
   `src/tedit_embed.tie` 终端模组子集装配
-- `build.ps1` 构建驱动；`tests/` 冒烟/验收探针（probe_l2 / probe_zd / smoke_stdio）
+- `build.tsh.tie` 构建驱动（tsh 角色）；`tests/` 冒烟/验收探针
+  （probe_l2 / probe_zd / smoke_repl.tsh.tie / smoke_stdio.tsh.tie）
 - `docs/` 模块清单、三嵌入形态、srv 协议对接
 
 ## License
