@@ -27,18 +27,18 @@ tshell 核心用 **tie 语言**编写，REPL 求值内核**复用 tiec 自举解
 - 用 tiec 的 stage0 编译器（`tiec/compiler/tiec.exe`）自举编译。
 
 ```powershell
-# 一次构建（生成 src/tsh_main.exe）
+# 一次构建两装配（standalone + tedit 终端模组子集）
 powershell -File build.ps1
-# 或直接用 tiec 编译装配入口
-..\tiec\compiler\tiec.exe src\tsh_main.tie
+# 或直接用 tiec 编译装配入口（--no-cache 强制重编）
+..\tiec\compiler\tiec.exe --no-cache src\tsh_main.tie
 ```
 
 ## 运行 / Run
 
 ```powershell
 src\tsh_main.exe            # 交互 REPL
-src\tsh_main.exe -e "1+2"   # 单行求值（p.9.3.3 run）
-src\tsh_main.exe -f x.tie   # 脚本文件（p.9.3.3 run）
+src\tsh_main.exe -e "1+2"   # 单行求值（输出 3）
+src\tsh_main.exe -f x.tie   # 脚本文件（p.9.3.3 run，含 shebang）
 src\tsh_main.exe --stdio    # tink 帧协议服务（p.9.3.4 srv）
 ```
 
@@ -59,13 +59,17 @@ REPL 解析优先级（架构 §4）：**tie 表达式 → 内建命令 → 外�
 | `run` | 脚本运行时（argv/env/exit/shebang） |
 | `observe` | tieir 观测 / 调试（经 trm 对象模型） |
 
-独立 `tsh_main.exe` = 默认全量装配；嵌入者按 `src/*.tie` 取子集（详见 `docs/` 目录）。
+独立 `tsh_main.exe` = 默认全量装配；嵌入者按 `src/*.tie` 取子集：
+见 [docs/modules.md](docs/modules.md)（九模块清单/依赖方向/装配子集）与
+[docs/embed.md](docs/embed.md)（三嵌入形态 + tedit 终端模组子集说明）；双形态协议
+对接见 [docs/srv.md](docs/srv.md)。
 
 ## 内容 / Contents
 
-- `src/` tshell 模块源码（tie 语言）；`src/tsh_main.tie` 装配器/入口
-- `build.ps1` 构建驱动；`tests/` 冒烟/验收探针
-- `docs/` 模块清单、三嵌入形态、srv 协议对接（p.9.3.x 附录）
+- `src/` tshell 模块源码（tie 语言）；`src/tsh_main.tie` 装配器/入口，
+  `src/tedit_embed.tie` 终端模组子集装配
+- `build.ps1` 构建驱动；`tests/` 冒烟/验收探针（probe_l2 / probe_zd / smoke_stdio）
+- `docs/` 模块清单、三嵌入形态、srv 协议对接
 
 ## License
 
