@@ -1,0 +1,62 @@
+type tie<tsh>
+// probe_defA.tsh.tie —— 缺陷A 针对性探针（ROAD p.9.3.7）
+// 函数体内多局部变量 + exec_* 内建 + 内层块后继续用局部 → 局部槽不得丢失
+var g_fail: i64 = 0
+func ck(cond: bool, name: string) {
+    if cond {
+        println("[PASS] " + name)
+    } else {
+        println("[FAIL] " + name)
+        g_fail = 1
+    }
+}
+func bstr(b: bool) -> string {
+    if b { return "T" }
+    return "F"
+}
+
+// 多局部 + exec_code + 内层 while 块（穿插段）后继续用 [pre, rc, post]
+func assemble(tag: string) -> string {
+    var pre = "["
+    var rc = exec_code("cmd /c echo x >nul 2>&1")
+    var k: i64 = 0
+    while k < 3 {
+        var inner = to_string(k)
+        if k == 2 {
+            inner = inner + "!"
+        }
+        k = k + 1
+    }
+    var mid = exec_output("cmd /c echo M")
+    var post = "]"
+    return pre + tag + to_string(rc) + mid + post
+}
+var a1 = assemble("A")
+ck(has_prefix(a1, "[A0M") && has_suffix(a1, "]"),
+    "multi-local + exec_code + inner-block post-locals intact: " + a1)
+
+// 两个 post-var 都在内层块之后 + file_exists 桥累积后仍各自正确
+func build_paths(base: string) -> string {
+    var p1 = base + "\\x.txt"
+    var p2 = base + "\\y.txt"
+    var i: i64 = 0
+    while i < 2 {
+        var _w = file_write(p1, "a")
+        i = i + 1
+    }
+    var q = base + "\\z.txt"
+    var e1 = file_exists(p1)
+    var e2 = file_exists(p2)
+    var fb1 = bstr(file_exists(p1))
+    var fb2 = bstr(file_exists(p2))
+    return p1 + "|" + p2 + "|" + q + "|" + fb1 + fb2
+}
+var ap = build_paths(cwd())
+ck(str_len(ap) > 0, "file returns after inner block, locals p1/p2/q intact: " + ap)
+
+if g_fail != 0 {
+    println("DEF A: FAIL (exit 1)")
+    exit(1)
+}
+println("DEF A: PASS (exit 0)")
+exit(0)

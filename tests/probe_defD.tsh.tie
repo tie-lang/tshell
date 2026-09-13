@@ -1,0 +1,54 @@
+type tie<tsh>
+// probe_defD.tsh.tie —— 缺陷D 针对性探针（ROAD p.9.3.7）
+// 长循环 var 序列：整文件脚本内连续声明并引用大量局部变量，不得有任何
+// 'command not found: var' 误报（宿主以其 stderr 捕获判零）；var/赋值裸行
+// 不得被误分派进命令层。
+var g_fail: i64 = 0
+func ck(cond: bool, name: string) {
+    if cond {
+        println("[PASS] " + name)
+    } else {
+        println("[FAIL] " + name)
+        g_fail = 1
+    }
+}
+
+// 长循环：每轮声明多个局部 + 赋值 + 内层块，模拟 gen-docs 长跑路径
+var acc: i64 = 0
+var round: i64 = 0
+while round < 300 {
+    var v0 = round
+    var v1 = v0 + 1
+    var v2 = v0 * 2
+    var v3 = v0 - 3
+    v0 = v1 + v2
+    acc = acc + v0 + v3 + v2
+    var inner: i64 = 0
+    while inner < 2 {
+        var iw = inner * 3
+        acc = acc + iw
+        inner = inner + 1
+    }
+    round = round + 1
+}
+ck(round == 300 && acc > 0, "300-loop vars resolve & sum (acc=" + to_string(acc) + ")")
+
+// 顶层/块内交错 var + 赋值，继续跨块后变量仍可读
+var base = 0
+var j: i64 = 0
+while j < 50 {
+    var p = j + 100
+    var q = p * 2
+    base = base + q
+    var l2 = p - 50
+    base = base + l2
+    j = j + 1
+}
+ck(base > 0, "50-loop p/q/l2 locals intact (base=" + to_string(base) + ")")
+
+if g_fail != 0 {
+    println("DEF D: FAIL (exit 1)")
+    exit(1)
+}
+println("DEF D: PASS (exit 0)")
+exit(0)

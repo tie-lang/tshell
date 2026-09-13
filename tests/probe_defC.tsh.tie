@@ -1,0 +1,51 @@
+type tie<tsh>
+// probe_defC.tsh.tie —— 缺陷C 针对性探针（ROAD p.9.3.7）
+// file_exists / mkdir_all 对运行期新建路径须即时正确（每次调用实盘查询，无启动快照）
+var g_fail: i64 = 0
+func ck(cond: bool, name: string) {
+    if cond {
+        println("[PASS] " + name)
+    } else {
+        println("[FAIL] " + name)
+        g_fail = 1
+    }
+}
+func bstr(b: bool) -> string {
+    if b { return "T" }
+    return "F"
+}
+
+var stamp = to_string(time_now())
+var f = cwd() + "\\rt_file_" + stamp + ".txt"
+// 1) 运行期新建文件：file_write 后 file_exists 必须立即为真（不得返回启动假快照）
+var pre_f = file_exists(f)
+var _w = file_write(f, "payload")
+var after_f = file_exists(f)
+ck(!pre_f && after_f, "runtime-created file immediately visible (pre=" + bstr(pre_f) + " after=" + bstr(after_f) + ")")
+
+// 2) 运行期新建目录：mkdir_all 后 file_exists 立即为真
+var d = cwd() + "\\rt_dir_" + stamp
+var pre_d = file_exists(d)
+var mk1 = mkdir_all(d)
+var after_d = file_exists(d)
+ck(!pre_d && mk1 && after_d, "mkdir_all then file_exists immediately true (pre=" + bstr(pre_d) + " mk=" + bstr(mk1) + " after=" + bstr(after_d) + ")")
+
+// 3) mkdir_all 幂等：目标已存在时再次调用仍成功（不报陈旧真假值）
+var mk2 = mkdir_all(d)
+ck(mk2, "mkdir_all idempotent on existing dir (mk2=" + bstr(mk2) + ")")
+
+// 4) rd 后首 mkdir：目录移除后首 mkdir_all 真正创建（无空前一次删除的竞态旧值）
+var d2 = cwd() + "\\rt_race_" + stamp
+mkdir_all(d2)
+var _r1 = exec_code("cmd /c rd /s /q " + d2 + " >nul 2>&1")
+var gone = !file_exists(d2)
+var mkA = mkdir_all(d2)
+var after2 = file_exists(d2)
+ck(gone && mkA && after2, "rd then first mkdir_all succeeds (gone=" + bstr(gone) + " mk=" + bstr(mkA) + " after=" + bstr(after2) + ")")
+
+if g_fail != 0 {
+    println("DEF C: FAIL (exit 1)")
+    exit(1)
+}
+println("DEF C: PASS (exit 0)")
+exit(0)

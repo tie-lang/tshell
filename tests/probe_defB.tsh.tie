@@ -1,0 +1,72 @@
+type tie<tsh>
+// probe_defB.tsh.tie —— 缺陷B 针对性探针（ROAD p.9.3.7）
+// 递归/嵌套调用返回后，调用方当前块后续声明的第二个 var 须落到正确作用域
+var g_fail: i64 = 0
+func ck(cond: bool, name: string) {
+    if cond {
+        println("[PASS] " + name)
+    } else {
+        println("[FAIL] " + name)
+        g_fail = 1
+    }
+}
+
+// fib：递归后用 a / b 两个局部（恢复后被调方段穿插，两 var 均须命中）
+func fib(n: i64) -> i64 {
+    if n <= 1 {
+        return n
+    }
+    var a = fib(n - 1)
+    var b = fib(n - 2)
+    return a + b
+}
+ck(fib(7) == 13, "fib(7)=13")
+ck(fib(20) == 6765, "fib(20)=6765")
+
+// 递归 select 求和：递归返回后声明 cnt + total 两局部并继续累加（上一批旧实现
+// 第二 var 错位），中间嵌套一个可穿插内层段的子调用加深穿插
+func select_sum(lo: i64, hi: i64) -> i64 {
+    if lo > hi {
+        return 0
+    }
+    var mid = (lo + hi) / 2
+    var lhs = select_sum(lo, mid - 1)
+    var rhs = select_sum(mid + 1, hi)
+    var total = lhs + rhs
+    var cnt: i64 = 0
+    var f: i64 = 0
+    while f < 1 {
+        var t = 0
+        f = f + 1
+        t = total
+        var unused = 1
+        f = f + 0
+        cnt = cnt + unused * 0
+    }
+    return total + cnt + mid
+}
+// 0..4 的二叉求和：按 mid 递归全部贡献 mid 累加值
+ck(select_sum(0, 4) == 0 + 1 + 2 + 3 + 4, "recursive select_sum(0,4) sums 0..4 (two locals after recursion)")
+
+// 嵌套块后第二次外层 var（穿插更深一层），随后仍可读
+func nesting() -> string {
+    var first = "F"
+    var g: i64 = 0
+    while g < 2 {
+        var dd = "x"
+        if g == 1 {
+            var ee = "y"
+        }
+        g = g + 1
+    }
+    var second = "S"
+    return first + second
+}
+ck(nesting() == "FS", "nested0loop then 2nd outer var: " + nesting())
+
+if g_fail != 0 {
+    println("DEF B: FAIL (exit 1)")
+    exit(1)
+}
+println("DEF B: PASS (exit 0)")
+exit(0)

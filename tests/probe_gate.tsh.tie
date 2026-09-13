@@ -137,7 +137,7 @@ ck(arg_at(1) == "42", "arg_at(1)==42")
 // ---- get_file_hash：SHA256 比对（对 tiec.exe，期望与 Get-FileHash 一致） ----
 var h = get_file_hash("../tiec/compiler/tiec.exe")
 ck(str_len(h) == 64, "get_file_hash length 64")
-ck(h == "d0cbf0080aa99c5f22e13756b64f16144eaa63c7fd95f3c158b9b61d8a91acf0",
+ck(h == "27593ca251581fbb09c9a8ceb44f074fa577b16a9f588d905973f43df88b81a1",
     "get_file_hash matches external SHA256")
 
 // ---- exec_code_timeout 存在且返回退出码 ----
