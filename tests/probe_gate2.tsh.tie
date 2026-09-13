@@ -1,0 +1,117 @@
+type tie<tsh>
+// probe_gate2.tsh.tie —— 批次④确定性缺陷根因修复验收探针
+// ============================================================
+// 覆盖 7 项：①顶层字符串循环累加（多行文件组装路径）②连续 N 次
+// exec_code + get_file_hash + file_exists（状态稳定）③remove_file 删除后
+// file_exists=false ④sort_strings 排序正确 ⑤regex_findstr 命中/未命中两态
+// ⑥sleep_ms 短暂等待（time_now 前后差>0）⑦递归两-var 函数正确（重入修复）。
+//
+// 运行（tsh 宿主重编译后，仓库根）:
+//   <tsh-main> -f tshell\tests\probe_gate2.tsh.tie
+// 期望：全部 [PASS] + GATE4: PASS (exit 0)
+
+func bstr(b: bool) -> string {
+    if b { return "T" }
+    return "F"
+}
+
+var g_fail: i64 = 0
+func ck(cond: bool, name: string) {
+    if cond {
+        println("[PASS] " + name)
+    } else {
+        println("[FAIL] " + name)
+        g_fail = 1
+    }
+}
+
+// ---- ① 顶层字符串循环累加（多行文件组装路径）----
+var s = ""
+var it1: i64 = 0
+while it1 < 5 {
+    s = s + "x"
+    it1 = it1 + 1
+}
+ck(str_len(s) == 5 && s == "xxxxx", "top-level string accumulate s==" + s)
+
+// 局部 builder 累加（函数内，递归修复后亦应正确）
+func build_local() -> string {
+    var b = ""
+    var k: i64 = 0
+    while k < 4 {
+        b = b + "ab"
+        k = k + 1
+    }
+    return b
+}
+var lb = build_local()
+ck(str_len(lb) == 8 && lb == "abababab", "local string accumulate (func) len=8")
+
+// ---- ② 连续 exec_code + get_file_hash + file_exists（状态稳定）----
+var tmpf = cwd() + "\\probe_gate2_tmp.txt"
+var _w = file_write(tmpf, "gate2-payload")
+var href = get_file_hash(tmpf)
+var statok = true
+var cop: i64 = 0
+while cop < 12 {
+    var _rc = exec_code("cmd /c echo gate2-" + to_string(cop) + " >nul 2>&1")
+    cop = cop + 1
+}
+var ex = file_exists(tmpf)
+var h = get_file_hash(tmpf)
+statok = ex && str_len(h) == 64
+ck(statok, "after 12x exec_code: file_exists + get_file_hash stable (hlen=" + to_string(str_len(h)) + ")")
+
+// ---- ③ remove_file：删除后 file_exists=false ----
+var delf = cwd() + "\\probe_gate2_del.txt"
+var _w2 = file_write(delf, "doomed")
+var rm_ok = remove_file(delf)
+var rm_gone = !file_exists(delf)
+ck(rm_ok && rm_gone, "remove_file deletes then file_exists=false")
+
+// ---- ④ sort_strings 排序正确 ----
+var sd = list_dir("tests")
+var sorted = sort_strings(sd)
+var cnt: i64 = 0
+var prev = ""
+var sorted_ok = true
+for cur in sorted {
+    if cnt > 0 && prev > cur {
+        sorted_ok = false
+    }
+    prev = cur
+    cnt = cnt + 1
+}
+ck(sorted_ok && cnt == len(sd), "sort_strings ascending, preserves count (" + to_string(cnt) + ")")
+
+// ---- ⑤ regex_findstr 命中/未命中两态 ----
+var rhit = regex_findstr("hello gate2 world", "gate[0-9]+")
+var rmiss = regex_findstr("hello world", "^zzz")
+ck(rhit, "regex_findstr hit on 'gate[0-9]+'")
+ck(!rmiss, "regex_findstr miss on '^zzz'")
+
+// ---- ⑥ sleep_ms 短暂等待 ----
+var t0 = time_now()
+sleep_ms(40)
+var t1 = time_now()
+ck(t1 > t0, "sleep_ms(40) waits (delta>0)")
+
+// ---- ⑦ 递归两-var 函数正确（重入修复）----
+func fib(n: i64) -> i64 {
+    if n <= 1 {
+        return n
+    }
+    var a = fib(n - 1)
+    var b = fib(n - 2)
+    return a + b
+}
+ck(fib(7) == 13, "fib(7)=13 (re-entrant recursion, 2 vars)")
+ck(fib(20) == 6765, "fib(20)=6765 (deeper recursion)")
+
+// ---- 汇总结论 ----
+if g_fail != 0 {
+    println("GATE4: FAIL (exit 1)")
+    exit(1)
+}
+println("GATE4: PASS (exit 0)")
+exit(0)
