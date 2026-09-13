@@ -1,0 +1,68 @@
+type tie<logic>
+import "../src/zd.tie"
+import "../src/sh_util.tie"
+
+// 构造字节表：整数字节 → 表。
+func mk_bytes(vals: table<i64>) -> table<i64> {
+    return vals
+}
+
+func check(cond: bool, msg: string) -> i64 {
+    if !cond {
+        println("FAIL: " + msg)
+        return 1
+    }
+    println("PASS: " + msg)
+    return 0
+}
+
+func main() -> i64 {
+    var fails = 0
+    // CRC32-IEEE 检查向量：crc32("123456789") == 0xCBF43926
+    var test = table_new_i64()
+    table_push(test, 49)  // '1'
+    table_push(test, 50)  // '2'
+    table_push(test, 51)  // '3'
+    table_push(test, 52)  // '4'
+    table_push(test, 53)  // '5'
+    table_push(test, 54)  // '6'
+    table_push(test, 55)  // '7'
+    table_push(test, 56)  // '8'
+    table_push(test, 57)  // '9'
+    fails = fails + check(zd.z_crc32(test) == 0xCBF43926, "crc32 vector 0xCBF43926")
+    // 帧编解码往返
+    var payload = table_new_i64()
+    table_push(payload, 1)
+    table_push(payload, 2)
+    table_push(payload, 3)
+    var frame = zd.z_encode(payload)
+    // 帧长度 = 4(len) + 3(payload) + 4(crc) = 11
+    fails = fails + check(zd.z_len(frame) == 11, "frame length 11, got " + to_string(zd.z_len(frame)))
+    var nxt = zd.z_decode(frame, 0)
+    fails = fails + check(nxt == 11 && zd.z_ok(), "decode ok next=11")
+    // 解码 payload 与 CRC 校验字节级一致
+    var back = zd.z_payload()
+    fails = fails + check(zd.z_len(back) == 3, "payload len 3")
+    fails = fails + check(zd.z_crc32(back) == zd.z_crc32(payload), "CRC matches")
+    // 篡改拒绝
+    var frame2 = zd.z_encode(payload)
+    frame2[1] = 9  // 篡改 payload[0]
+    var bad = zd.z_decode(frame2, 0)
+    fails = fails + check(bad < 0 || !zd.z_ok(), "tampered frame rejected")
+    // 多帧连接解码（两帧拼接）
+    var fA = zd.z_encode(payload)
+    var fB = zd.z_encode(payload)
+    var buf = table_new_i64()
+    for b in fA { table_push(buf, b) }
+    for b in fB { table_push(buf, b) }
+    var p1 = zd.z_decode(buf, 0)
+    fails = fails + check(p1 == zd.z_len(fA) && zd.z_ok(), "first frame decoded")
+    var p2 = zd.z_decode(buf, zd.z_end())
+    fails = fails + check(p2 == zd.z_len(buf) && zd.z_ok(), "second frame decoded")
+    if fails == 0 {
+        println("ZD FRAME CODEC: ALL PASS")
+    } else {
+        println("ZD FAILURES: " + to_string(fails))
+    }
+    return 0
+}
