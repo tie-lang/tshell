@@ -1,0 +1,12 @@
+type tie<tsh>
+// probe_fail.tsh.tie —— 条件出口失败路径证明：脚本按条件输出非零退出码。
+// 由 tshell -f 整文件语义的 exit(n) 表达式内建实现（失败契约）。
+var ok = false
+if ok {
+    println("should not reach")
+    exit(0)
+} else {
+    println("CONDITIONAL FAIL PATH: exiting 1")
+    exit(1)
+}
+exit(9)

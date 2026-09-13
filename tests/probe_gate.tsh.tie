@@ -1,0 +1,154 @@
+type tie<tsh>
+// probe_gate.tsh.tie —— tsh 门禁样式探针（脚本运行时能力根因修复验收）
+// --------------------------------------------------------------
+// 模拟回归脚本需要的全部能力组合，验证 tshell -f 整文件脚本语义（p.9.4）：
+//   ① 跨行持久函数 / 多语句体 / 带参函数 / 前向声明调用
+//   ② 多行 if / while / for 块
+//   ③ list_dir 枚举 + contains / has_prefix / has_suffix / split_lines /
+//      split_char / substr / replace_all / is_empty
+//   ④ arg_at 读脚本参数、get_file_hash 算 SHA256 比对
+//   ⑤ 条件 exit(1) / exit(0)（失败路径返回非零退出码）
+//   ⑥ 字符串字面 `|` 逃逸（whole-file 求值 + pipe_char 内建）
+//   ⑦ exec_code_timeout 存在且返回退出码
+//
+// EN: gate-style tsh probe (script-runtime fix acceptance). Exercises whole-file
+// script semantics: persistent fns, multi-line blocks, string/dir/args/hash
+// builtins, literal | escape, conditional exit(n) nonzero failure contract.
+//
+// RUN (from repo root where tshell is a sibling):
+//   tshell\src\tsh_main.exe -f tshell\tests\probe_gate.tsh.tie HELLO 42
+//   echo $LASTEXITCODE   # expect 0
+
+var g_fail: i64 = 0
+
+func ck(cond: bool, name: string) {
+    if cond {
+        println("[PASS] " + name)
+    } else {
+        println("[FAIL] " + name)
+        g_fail = 1
+    }
+}
+
+// 带参、多语句体函数
+func add(a: i64, b: i64) -> i64 {
+    var s: i64 = a
+    s = s + b
+    return s
+}
+
+// 多语句体 + 循环（迭代式，非递归——interp 递归 re-entrancy 为已知局限，见报告）
+func fact_iter(n: i64) -> i64 {
+    var r: i64 = 1
+    var k: i64 = 1
+    while k <= n {
+        r = r * k
+        k = k + 1
+    }
+    return r
+}
+
+// 多行 if / else if / else
+func grade(s: i64) -> string {
+    if s >= 90 {
+        return "A"
+    } else if s >= 60 {
+        return "B"
+    } else {
+        return "C"
+    }
+}
+
+// ---- 前向声明：doubled 定义在首次使用之后，验证第一趟全注册 ----
+ck(add(2, 3) == 5, "add(2,3)=5 (multi-stmt body)")
+ck(fact_iter(5) == 120, "fact_iter(5)=120 (multi-stmt + loop)")
+ck(grade(95) == "A", "grade(95)=A (multi-line if)")
+ck(grade(50) == "C", "grade(50)=C (multi-line if else)")
+ck(doubled(4) == 8, "forward-declared doubled(4)=8")
+
+// doubled 定义在首次使用之后（前向声明，验证第一趟全注册）
+func doubled(x: i64) -> i64 {
+    return x * 2
+}
+
+// ---- 多行 while / for 块 ----
+var total: i64 = 0
+var ci: i64 = 0
+while ci < 5 {
+    total = total + ci
+    ci = ci + 1
+}
+ck(total == 10, "while 0..4 sum=10 (multi-line block)")
+
+var acc = ""
+for ch in "abc" {
+    acc = acc + ch
+}
+ck(acc == "abc", "for over string 'abc' (multi-line block)")
+
+// ---- 目录枚举 + 字符串内建 ----
+var entries = list_dir("tests")
+var found_probe: bool = false
+var had_prefix: bool = false
+for e in entries {
+    if e == "probe_gate.tsh.tie" {
+        found_probe = true
+    }
+    if has_prefix(e, "probe_") {
+        had_prefix = true
+    }
+}
+ck(found_probe, "list_dir enumerates probe file")
+ck(had_prefix, "has_prefix on dir entry")
+
+var content = file_read("tests/probe_gate.tsh.tie")
+var lcnt: i64 = 0
+var llines = split_lines(content)
+for l in llines {
+    lcnt = lcnt + 1
+}
+ck(lcnt > 5, "split_lines yields >5 lines")
+ck(contains(content, "func"), "contains sees 'func'")
+ck(has_suffix("file.tsh.tie", ".tsh.tie") == true, "has_suffix true")
+ck(has_suffix("file.tie", ".tsh.tie") == false, "has_suffix false-neg")
+ck(replace_all("a-b-c", "-", "+") == "a+b+c", "replace_all")
+ck(substr("hello", 1, 3) == "el", "substr(1,3)=el")
+var pcnt: i64 = 0
+var parts = split_char("x:y:z", ":")
+for p in parts {
+    pcnt = pcnt + 1
+}
+ck(pcnt == 3, "split_char('x:y:z',':') -> 3 parts")
+ck(is_empty("") == true, "is_empty('') true")
+ck(is_empty("x") == false, "is_empty('x') false")
+
+// ---- 字面 `|` 逃逸（管道分派劫持规避） ----
+var pipe = pipe_char()
+ck(pipe == "|", "pipe_char() returns literal |")
+var joined = "a" + pipe + "b"
+ck(contains(joined, pipe), "pipe built via pipe_char()")
+ck(contains("x|y", "|") == true, "literal | inside string (whole-file)")
+
+// ---- 脚本参数读取 ----
+ck(arg_count() == 2, "arg_count()==2")
+ck(arg_at(0) == "HELLO", "arg_at(0)==HELLO")
+ck(arg_at(1) == "42", "arg_at(1)==42")
+
+// ---- get_file_hash：SHA256 比对（对 tiec.exe，期望与 Get-FileHash 一致） ----
+var h = get_file_hash("../tiec/compiler/tiec.exe")
+ck(str_len(h) == 64, "get_file_hash length 64")
+ck(h == "d0cbf0080aa99c5f22e13756b64f16144eaa63c7fd95f3c158b9b61d8a91acf0",
+    "get_file_hash matches external SHA256")
+
+// ---- exec_code_timeout 存在且返回退出码 ----
+var rc_to = exec_code_timeout("exit /b 3", 500)
+ck(rc_to == 3, "exec_code_timeout returns exit code 3")
+
+// ---- 条件退出：失败路径返回非零 ----
+if g_fail != 0 {
+    println("GATE: FAIL (exit 1)")
+    exit(1)
+} else {
+    println("GATE: PASS (exit 0)")
+    exit(0)
+}

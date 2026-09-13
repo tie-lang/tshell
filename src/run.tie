@@ -59,7 +59,9 @@ pub func rn_eval_expr(expr: string) -> string {
     return repl.repl_handle(expr)
 }
 
-// 执行脚本文件（-f / 裸路径）：逐行分派。
+// 执行脚本文件（-f / 裸路径）：整文件语义（p.9.4）。整文件 parse + 顺序求值，
+// 函数跨行持久、多行 if/while/for 块、字符串/目录/参数/hash 内建、条件 exit(n)
+// 全部生效；脚本内 exit(非0) → 进程返回该退出码（失败契约）。
 pub func rn_run_script(path: string) -> i64 {
     if path == "" {
         print_err("[tshell] 脚本路径为空\n")
@@ -74,26 +76,37 @@ pub func rn_run_script(path: string) -> i64 {
         // 去 shebang 首行（Windows 平台限制：须显式 tshell 调用）
         content = strip_shebang(content)
     }
-    // 去 tsh 角色头部声明（`type tie<tsh>`）——tiec 以头部扫描识别 tsh 角色并
-    // 分派给 tshell 运行；该行是角色声明语法（非可求值表达式），须剥掉再逐行执行。
+    // 去 tsh 角色头部声明（`type tie<tsh>`）——纯角色声明语法，非可求值语句。
     content = strip_role_header(content)
-    var lines = sh_util.u_lines(content)
-    for ln in lines {
-        if command.ex_req() {
-            return command.ex_code()
-        }
-        var out = run_line(ln)
-        if out != "" {
-            if sh_util.u_starts(out, "tshell: command not found") {
-                print_err(out + "\n")
-            } else {
-                println(out)
-            }
-        } else if ln == "" {
-            continue
+    // 收集脚本参数（跳过 `-f <path>` 或裸脚本路径前缀）：argv[0] 为 -f 时
+    // 从下标 2 起，否则（裸路径）从下标 1 起。
+    var sargs = table_new_string()
+    var off: i64 = 1
+    if arg_string(0) == "-f" {
+        off = 2
+    }
+    var ai: i64 = off
+    while ai < arg_count() {
+        table_push(sargs, arg_string(ai))
+        ai = ai + 1
+    }
+    backend_interp.b_set_script_args(sargs)
+    // 顶层裸 `exit [N]`（旧式命令形）归一化为 `exit(N)` 表达式形——全文件求值时
+    // `exit 7` 非合法 tie 语法；新契约统一为 `exit(n)`。父表达式形 exit(...) 原样透传。
+    content = normalize_exit_calls(content)
+    // 整文件求值
+    var out = backend_interp.b_eval_script(content)
+    if backend_interp.b_exit_requested() {
+        return backend_interp.b_exit_code()
+    }
+    if out != "" {
+        if sh_util.u_starts(out, "tshell: command not found") {
+            print_err(out + "\n")
+        } else {
+            println(out)
         }
     }
-    return command.ex_code()
+    return 0
 }
 
 // 去 tsh 角色头部声明行：连续前导空白行后的 `type tie` 或 `type tie<...>` 声明。
@@ -231,6 +244,51 @@ func strip_shebang(content: string) -> string {
         table_push(out, ln)
     }
     return sh_util.u_join(out, "\n")
+}
+
+// 顶层裸 exit 命令归一化：整行 trim 后恰为 `exit` 或 `exit <十进制整数>`
+// 的顶层语句改写为 exit(0) / exit(N)；`exit(...)` 表达式形原样透传。
+func normalize_exit_calls(content: string) -> string {
+    var lines = sh_util.u_lines(content)
+    var out = table_new_string()
+    for ln in lines {
+        out = normalize_one_exit_line(ln, out)
+    }
+    return sh_util.u_join(out, "\n")
+}
+
+func normalize_one_exit_line(ln: string, out: table<string>) -> table<string> {
+    var t = sh_util.u_trim(ln)
+    if t == "exit" {
+        table_push(out, "exit(0)")
+        return out
+    }
+    var n = str_len(t)
+    if n > 4 && sh_util.u_starts(t, "exit") && str_char(t, 4) == " " {
+        var arg = sh_util.u_trim(sh_util.u_sub(t, 5, n))
+        if is_digits(arg) {
+            table_push(out, "exit(" + arg + ")")
+            return out
+        }
+    }
+    table_push(out, ln)
+    return out
+}
+
+func is_digits(s: string) -> bool {
+    var n = str_len(s)
+    if n == 0 {
+        return false
+    }
+    var i: i64 = 0
+    while i < n {
+        var c = str_char(s, i)
+        if c < "0" || c > "9" {
+            return false
+        }
+        i = i + 1
+    }
+    return true
 }
 
 }   // namespace run
