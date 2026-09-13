@@ -1,0 +1,30 @@
+type tie<logic>
+import "./repl.tie"
+import "./command.tie"
+import "./pipeline.tie"
+import "./render.tie"
+import "./backend_interp.tie"
+// src/tsh_main.tie —— tshell 装配器最小实现（L4 宿主入口），默认全量装配
+// --------------------------------------------------------------
+// 独立 tshell（standalone = 默认全量装配）入口。先行批 p.9.3.1 装配
+// repl/command/pipeline/render 核心；后续子项（p.9.3.2-6）并入模块到本装配器。
+// CLI：tshell → 交互 REPL；-e/-f/--stdio 由 run/srv 子项接管。
+//
+// EN: standalone shell entry (L4 host), full-assembly default. p.9.3.1 assembles
+// repl/command/pipeline/render core; later sub-items merge modules in.
+
+func main() -> i64 {
+    println("tshell 0.1 (p.9.3.1 先行: repl/command/pipeline/render)  —— 输入 exit 退出")
+    while !command.ex_req() {
+        print("tie> ")
+        var line = read_line()
+        // EOF 时 read_line 内部退出（与 tiec repl 一致）
+        var out = repl.repl_handle(line)
+        if out != "" {
+            render.r_emit(out)
+        } else if !command.ex_req() {
+            render.r_emit_line("")
+        }
+    }
+    return 0
+}

@@ -1,0 +1,67 @@
+type tie<logic>
+import "./sh_util.tie"
+import "./render.tie"
+import "./command.tie"
+import "./pipeline.tie"
+import "./backend_interp.tie"
+// src/repl.tie —— REPL 模块（L0）：求值循环 · 三通道分派 · 异常捕获
+// --------------------------------------------------------------
+// 交互式求值循环：读一行 → 解析分派 → 结果渲染。解析优先级对齐架构 §4：
+// ① tie 表达式（interp 后端）→ ② 内建命令 → ③ 外部命令 → ④ 拼写纠错。
+// 尝试以 tie 求值，报错则回落命令通道。
+//
+// EN: REPL loop — read a line, dispatch, render. tie expr first, then builtin /
+// external command, then did-you-mean.
+
+namespace repl {
+
+// 处理一行输入，返回要打印的文本（"" 则 REPL 补空行）。exit 时置 command 标志。
+pub func repl_handle(line: string) -> string {
+    var t = sh_util.u_trim(line)
+    if t == "" {
+        return ""
+    }
+    if t == ":quit" || t == ":q" || t == "exit" {
+        command.req_exit()
+        return ""
+    }
+    // 含管道 → 值管道
+    if sh_util.u_contains(t, "|") {
+        return pipeline.p_run(t)
+    }
+    var toks = sh_util.u_split_ws(t)
+    var head = toks[0]
+    // 显式内建命令优先
+    if command.c_is_builtin(head) {
+        return command.c_exec(toks)
+    }
+    // 尝试 tie 表达式求值
+    var res = backend_interp.b_eval(t)
+    if !is_eval_err(res) {
+        return res
+    }
+    // 回落命令通道：外部命令 / 纠错
+    var ext = command.run_external(t)
+    if ext != "" {
+        return ext
+    }
+    var hint = command.c_did_you_mean(head)
+    if hint != "" {
+        return "tshell: command not found: '" + head + "'; did you mean '" + hint + "'?"
+    }
+    return "tshell: command not found: " + head
+}
+
+// 判断 eval 返回文本是否为错误（对齐 interp 中文诊断口径）。
+func is_eval_err(res: string) -> bool {
+    if res == "" {
+        return false
+    }
+    if sh_util.u_contains(res, "未声明") || sh_util.u_contains(res, "运行时错误") ||
+       sh_util.u_contains(res, "错误") || sh_util.u_contains(res, "error") {
+        return true
+    }
+    return false
+}
+
+}   // namespace repl
