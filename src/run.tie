@@ -74,10 +74,13 @@ pub func rn_run_script(path: string) -> i64 {
         // 去 shebang 首行（Windows 平台限制：须显式 tshell 调用）
         content = strip_shebang(content)
     }
+    // 去 tsh 角色头部声明（`type tie<tsh>`）——tiec 以头部扫描识别 tsh 角色并
+    // 分派给 tshell 运行；该行是角色声明语法（非可求值表达式），须剥掉再逐行执行。
+    content = strip_role_header(content)
     var lines = sh_util.u_lines(content)
     for ln in lines {
         if command.ex_req() {
-            return 0
+            return command.ex_code()
         }
         var out = run_line(ln)
         if out != "" {
@@ -90,7 +93,36 @@ pub func rn_run_script(path: string) -> i64 {
             continue
         }
     }
-    return 0
+    return command.ex_code()
+}
+
+// 去 tsh 角色头部声明行：连续前导空白行后的 `type tie` 或 `type tie<...>` 声明。
+// 仅剥首个非空行；该行是脚本角色头，非可执行语句（tiec 已据其分派到 tshell）。
+func strip_role_header(content: string) -> string {
+    var lines = sh_util.u_lines(content)
+    var out = table_new_string()
+    var first: i64 = 0
+    var n = sh_util.u_len(lines)
+    // 跳到首个非空白行
+    while first < n && sh_util.u_trim(lines[first]) == "" {
+        first = first + 1
+    }
+    var trimmed = ""
+    if first < n {
+        trimmed = sh_util.u_trim(lines[first])
+    }
+    if sh_util.u_starts(trimmed, "type tie") {
+        // 剥该行
+        var i: i64 = 0
+        while i < n {
+            if i != first {
+                table_push(out, lines[i])
+            }
+            i = i + 1
+        }
+        return sh_util.u_join(out, "\n")
+    }
+    return content
 }
 
 // 单行脚本执行：优先 builtin 函数式调用（`ls()`/`cd(dir)`），再交共享分派。

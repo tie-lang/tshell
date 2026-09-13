@@ -16,6 +16,7 @@ import "./observe.tie"
 
 var g_cwd: string = ""
 var g_exit: bool = false
+var g_exit_code: i64 = 0   // 显式退出码（exit <N>，默认 0）
 
 namespace command {
 
@@ -78,6 +79,24 @@ pub func ex_req() -> bool {
     return g_exit
 }
 
+// 读取显式退出码（脚本退出时透传给 tshell 进程；默认 0）。
+pub func ex_code() -> i64 {
+    return g_exit_code
+}
+
+// exit [<N>]：置退出标志并把代码设为 N（缺省 0）。N 解析失败按 0。
+func cmd_exit(args: table<string>) -> string {
+    g_exit = true
+    g_exit_code = 0
+    if sh_util.u_len(args) >= 1 {
+        var n = parse_int(args[0])
+        if str_len(args[0]) > 0 {
+            g_exit_code = n
+        }
+    }
+    return ""
+}
+
 // 主入口：按 tokens 分派内建命令，返回输出文本。未知命令返回 "?"。
 pub func c_exec(toks: table<string>) -> string {
     if sh_util.u_len(toks) == 0 {
@@ -101,8 +120,7 @@ pub func c_exec(toks: table<string>) -> string {
         return sh_util.u_join(args, " ")
     }
     if cmd == "exit" {
-        g_exit = true
-        return ""
+        return cmd_exit(args)
     }
     if cmd == "help" {
         return cmd_help()

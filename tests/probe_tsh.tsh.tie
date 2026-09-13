@@ -1,0 +1,34 @@
+type tie<tsh>
+// probe_tsh.tsh.tie —— tsh 角色探针（shell 角色基础设施，p.9.4）
+// --------------------------------------------------------------
+// tiec 据 `.tsh.tie` 扩展名 + `type tie<tsh>` 头部识别 tsh 角色，推荐并由 tie 自己
+// 的 tshell 运行（driver 经 exec_code 调 `tshell -f`，tshell 解析：TSHELL→PATH）。
+// 本探针练习 tsh 脚本能力：tie 表达式 + 内建命令 + 环境变量 + 外部命令 + 显式退出码。
+//
+// EN: tsh-role probe. tiec routes .tsh.tie (by extension + `type tie<tsh>` header)
+// to tshell; this probe exercises tie exprs, builtins, env, external cmd, exit code.
+
+// 1) tie 表达式（interp.eval 求值）
+var left = 6 * 7
+var top = "tsh"
+println("tie-expr: " + top + " n=" + to_string(left))
+
+// 2) 内建命令函数式调用（command builtin）
+echo builtin-echo-ok
+pwd()
+ls()
+
+// 3) 环境变量读取（tie 内建 get_env）
+var hv = get_env("TIE_PROBE_VAR")
+println("env TIE_PROBE_VAR=" + hv)
+
+// 4) 外部命令 stdout 捕获 + 退出码（tie 内建 exec_output / exec_code。
+//    注：exec_output 捕获真实 exe 与 `cmd /c ...` 的 stdout；cmd 内建 echo/dir/ver
+//    直接写控制台不被管道捕获，故 stdout 演示用 cmd /c 包裹。）
+var who = exec_output("cmd /c echo external-ok")
+println("external=" + who)
+var rc_ext = exec_code("exit /b 0")
+println("exec_code exit=" + to_string(rc_ext))
+
+// 5) 显式退出码（exit <N> 内建 → tshell 进程退出码，driver 经 tshell_dispatch 透传）
+exit 7
