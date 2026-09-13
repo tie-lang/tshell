@@ -1,6 +1,7 @@
 type tie<logic>
 import "./sh_util.tie"
 import "./backend_interp.tie"
+import "./session.tie"
 // src/command.tie —— 命令模块（L1）：解析（tie→内建→外部）+ 内建命令集 + 纠错
 // --------------------------------------------------------------
 // 解析优先级（架构 §4）：① tie 表达式 → ② 内建命令（短一致命名）→ ③ 外部命令
@@ -46,6 +47,11 @@ pub func c_is_builtin(tok: string) -> bool {
         }
     }
     return false
+}
+
+// 内建命令名表（供 complete 补全源）。
+pub func c_builtins() -> table<string> {
+    return builtin_names()
 }
 
 // 设置退出标志（exit 命令 / REPL :quit 触发）。
@@ -100,7 +106,7 @@ pub func c_exec(toks: table<string>) -> string {
         return cmd_source(args)
     }
     if cmd == "history" {
-        return "" // 由 session 模块提供（p.9.3.2）
+        return sh_util.u_join(session.ss_lines(), "\n")
     }
     if cmd == "set" {
         return cmd_set(args)

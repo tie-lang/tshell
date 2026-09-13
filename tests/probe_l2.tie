@@ -1,0 +1,50 @@
+type tie<logic>
+import "../src/lineedit.tie"
+import "../src/complete.tie"
+import "../src/session.tie"
+import "../src/sh_util.tie"
+
+func main() -> i64 {
+    var fails = 0
+    session.ss_load()   // 加载已持久化历史（probe 进程独立于 REPL）
+    // ---- lineedit: insert / backspace / movement / accept ----
+    lineedit.le_reset()
+    lineedit.le_insert("h")
+    lineedit.le_insert("i")
+    lineedit.le_insert("!")
+    println("le_get=" + lineedit.le_get() + " cur=" + to_string(lineedit.le_cursor()))
+    lineedit.le_backspace()               // "hi"
+    var mid = lineedit.le_get()
+    if mid != "hi" { fails = fails + 1; println("FAIL backspace got " + mid) }
+    // 中插：移到行首再插 x → "xhi"
+    lineedit.le_home()
+    lineedit.le_insert("x")
+    if lineedit.le_get() != "xhi" { fails = fails + 1; println("FAIL home+insert got " + lineedit.le_get()) }
+    // ---- history up/down 用会话历史表 ----
+    var hist = session.ss_lines()          // 复用已加载历史
+    lineedit.le_reset()
+    lineedit.le_hist_up(hist)
+    var recalled = lineedit.le_get()
+    if recalled == "" { fails = fails + 1; println("FAIL hist_up empty") } else { println("hist_up recalled last line") }
+    lineedit.le_hist_down(hist)             // 回到原始
+    // ---- complete: builtin + cwd 源 ----
+    var cands = complete.cpl_candidates("l", 1)
+    var hitBuiltin = false
+    for c in cands {
+        if c == "ls" { hitBuiltin = true }
+    }
+    if !hitBuiltin { fails = fails + 1; println("FAIL complete ls") } else { println("complete |> ls 命中") }
+    var c2 = complete.cpl_candidates("sr", 2)
+    if sh_util.u_len(c2) == 0 { fails = fails + 1; println("FAIL complete cwd prefix") } else { println("complete cwd 前缀命中 " + to_string(sh_util.u_len(c2))) }
+    // ---- session config: 别名编辑 ----
+    var cfg = table_new_string()
+    table_push(cfg, "alias.ll = ls -l")
+    var cfg2 = session.ss_alias(cfg, "ll", "ls")
+    if session.ss_cfg_get(cfg2, "alias.ll") != "ls" { fails = fails + 1; println("FAIL alias set") } else { println("alias set ok") }
+    if fails == 0 {
+        println("L2 LINEEDIT/COMPLETE/SESSION: ALL PASS")
+    } else {
+        println("L2 FAILURES: " + to_string(fails))
+    }
+    return 0
+}
