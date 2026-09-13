@@ -8,6 +8,8 @@ import "./session.tie"
 import "./lineedit.tie"
 import "./complete.tie"
 import "./run.tie"
+import "./zd.tie"
+import "./srv.tie"
 // src/tsh_main.tie —— tshell 装配器最小实现（L4 宿主入口），默认全量装配
 // --------------------------------------------------------------
 // 独立 tshell（standalone = 默认全量装配）入口。装配 repl/command/pipeline/render
@@ -33,8 +35,7 @@ func main() -> i64 {
         return run.rn_run_script(mode[1])
     }
     if m0 == "stdio" {
-        // p.9.3.4 srv 接管
-        return 0
+        return srv.srv_stdio()
     }
     // interactive REPL
     println("tshell 0.1 (p.9.3.1-3: 核心+会话+脚本运行时)")
