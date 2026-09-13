@@ -1,0 +1,204 @@
+type tie<logic>
+import "./sh_util.tie"
+import "./command.tie"
+import "./pipeline.tie"
+import "./repl.tie"
+import "./backend_interp.tie"
+// src/run.tie —— 脚本运行时模块（L0，p.9.3.3）：-e / -f / 脚本 / shebang
+// --------------------------------------------------------------
+// 脚本与交互同引擎（架构 §6「脚本即交互」）：以同一 REPL 分派逐行执行——tie 表达式、
+// 内建命令、值管道在主循环首层生效；脚本文件整文件按 tie 程序跑并注入壳服务
+//（argv/env/cwd/退出码）。shebang（#!/usr/bin/env tshell）支持去首行；**Windows 平台
+// 限制**：系统不原生支持 shebang，须显式 `tshell script.tie`（或配置关联）。
+//
+// EN: script runtime (run module). Script and interactive share the same
+// dispatcher (design §6 "scripts are interactive"). shebang line is stripped;
+// Windows does not natively honor shebang — invoke `tshell script.tie` explicitly.
+
+namespace run {
+
+// 解析命令行参数：-e <expr> / -f <file>（或裸脚本路径）。返回模式：
+// 约定以 table<string> 传 [mode, value]；mode: "repl"|"e"|"f"|"script"。
+pub func rn_args() -> table<string> {
+    var out = table_new_string()
+    var i: i64 = 0
+    var argc = args_n()
+    if argc == 0 {
+        table_push(out, "repl")
+        return out
+    }
+    var a0 = arg_string(0)
+    if a0 == "-e" {
+        table_push(out, "e")
+        table_push(out, args_at(1))
+        return out
+    }
+    if a0 == "-f" {
+        table_push(out, "f")
+        table_push(out, args_at(1))
+        return out
+    }
+    if a0 == "--stdio" {
+        table_push(out, "stdio")
+        return out
+    }
+    // 其它视为脚本路径
+    table_push(out, "script")
+    table_push(out, a0)
+    return out
+}
+
+func args_n() -> i64 { return arg_count() }
+func args_at(i: i64) -> string {
+    if i < 0 || i >= arg_count() { return "" }
+    return arg_string(i)
+}
+
+// 单行求值（-e "expr"）：交共享分派，返回输出文本。
+pub func rn_eval_expr(expr: string) -> string {
+    return repl.repl_handle(expr)
+}
+
+// 执行脚本文件（-f / 裸路径）：逐行分派。
+pub func rn_run_script(path: string) -> i64 {
+    if path == "" {
+        print_err("[tshell] 脚本路径为空\n")
+        return 1
+    }
+    if !file_exists(path) {
+        print_err("[tshell] 脚本文件不存在: " + path + "\n")
+        return 1
+    }
+    var content = file_read(path)
+    if sh_util.u_starts(sh_util.u_trim(content), "#!") {
+        // 去 shebang 首行（Windows 平台限制：须显式 tshell 调用）
+        content = strip_shebang(content)
+    }
+    var lines = sh_util.u_lines(content)
+    for ln in lines {
+        if command.ex_req() {
+            return 0
+        }
+        var out = run_line(ln)
+        if out != "" {
+            if sh_util.u_starts(out, "tshell: command not found") {
+                print_err(out + "\n")
+            } else {
+                println(out)
+            }
+        } else if ln == "" {
+            continue
+        }
+    }
+    return 0
+}
+
+// 单行脚本执行：优先 builtin 函数式调用（`ls()`/`cd(dir)`），再交共享分派。
+func run_line(ln: string) -> string {
+    var t = sh_util.u_trim(ln)
+    if t == "" {
+        return ""
+    }
+    // builtin 函数式调用 `name(arg1, arg2)`
+    if is_builtin_call(t) {
+        return builtin_call(t)
+    }
+    return repl.repl_handle(t)
+}
+
+// 判断是否为 `builtin(...)` 形式。
+func is_builtin_call(t: string) -> bool {
+    var n = str_len(t)
+    if n < 3 { return false }
+    var lastc = str_char(t, n - 1)
+    if lastc != ")" { return false }
+    var name = ""
+    var i: i64 = 0
+    while i < n {
+        var c = str_char(t, i)
+        if c == "(" {
+            break
+        }
+        name = name + c
+        i = i + 1
+    }
+    if i >= n { return false }
+    return command.c_is_builtin(name)
+}
+
+// 执行 `name(arg1, arg2)` → 参数按逗号切分传入 command。
+func builtin_call(t: string) -> string {
+    var name = ""
+    var inner = ""
+    var n = str_len(t)
+    var i: i64 = 0
+    while i < n && str_char(t, i) != "(" {
+        name = name + str_char(t, i)
+        i = i + 1
+    }
+    i = i + 1 // 跳 '('
+    var grab = false
+    while i < n {
+        var c = str_char(t, i)
+        if c == ")" {
+            grab = true
+            break
+        }
+        inner = inner + c
+        i = i + 1
+    }
+    var toks = table_new_string()
+    table_push(toks, sh_util.u_trim(name))
+    // 逗号切分参数（无引号感知的简化：按逗号拆分）
+    if sh_util.u_trim(inner) != "" {
+        var parts = split_commas(inner)
+        for p in parts {
+            table_push(toks, strip_quotes(sh_util.u_trim(p)))
+        }
+    }
+    return command.c_exec(toks)
+}
+
+func split_commas(s: string) -> table<string> {
+    var out = table_new_string()
+    var cur = ""
+    var n = str_len(s)
+    var i: i64 = 0
+    while i < n {
+        if str_char(s, i) == "," {
+            table_push(out, cur)
+            cur = ""
+        } else {
+            cur = cur + str_char(s, i)
+        }
+        i = i + 1
+    }
+    table_push(out, cur)
+    return out
+}
+
+func strip_quotes(s: string) -> string {
+    var n = str_len(s)
+    if n >= 2 && ((str_char(s, 0) == "\"" && str_char(s, n - 1) == "\"") ||
+                  (str_char(s, 0) == "'" && str_char(s, n - 1) == "'")) {
+        return sh_util.u_sub(s, 1, n - 1)
+    }
+    return s
+}
+
+// 去 shebang 首行。
+func strip_shebang(content: string) -> string {
+    var lines = sh_util.u_lines(content)
+    var out = table_new_string()
+    var first = true
+    for ln in lines {
+        if first {
+            first = false
+            continue
+        }
+        table_push(out, ln)
+    }
+    return sh_util.u_join(out, "\n")
+}
+
+}   // namespace run
