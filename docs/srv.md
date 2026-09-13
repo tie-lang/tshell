@@ -24,8 +24,8 @@ crc   := crc32_ieee(payload)
 启动：`tshell --stdio`。子进程（或分布式宿主）逐帧：
 `stdin 读帧 → 以 REPL 三通道求值（tie/内建/外部）→ stdout 写响应帧`。
 
-验收：`powershell -File tests/smoke_stdio.ps1`——注入 `1+2` 帧，校验响应帧 payload==`3`
-且 CRC 有效（PASS: --stdio roundtrip 1+2 -> 3）。
+验收：`src\tsh_main.exe -f tests/smoke_stdio.tsh.tie`——注入 `1+2` 帧，校验响应帧
+payload==`3` 且 CRC 有效（PASS: --stdio roundtrip 1+2 -> 3）。
 
 ## tedit 同进程对接（默认形态）
 

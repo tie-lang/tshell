@@ -1,0 +1,25 @@
+type tie<tsh>
+// build.tsh.tie —— tsh (role tsh) build driver; tie/tsh port of build.ps1
+// usage: tsh_main.exe -f build.tsh.tie
+//        (set env TIE_BUILD_NOCACHE=1 to pass --no-cache to tiec)
+// Self-bootstrap via tiec stage0; builds two assemblies from src/*.tie:
+//   src\tsh_main.exe     standalone (full)
+//   src\tedit_embed.exe  tedit subset
+// NOTE(tsh-limitation): the tsh interp cannot issue a conditional `exit N`
+// (bare exit is unusable inside control blocks and exit(N) is unwired), so
+// on the tiec-missing / compile-fail path this logs the problem but the
+// process still returns 0 (build.ps1 used `exit 1` there).
+var root = cwd()
+var tiec = path_join(root, "..\\tiec\\compiler\\tiec.exe")
+if !file_exists(tiec) { println("[build] tiec stage0 not found: " + tiec) }
+if !file_exists(tiec) { println("[build] please clone tie-lang/tiec as a sibling of this repo.") }
+var opts = ""
+if get_env("TIE_BUILD_NOCACHE") == "1" { opts = "--no-cache " }
+println("[build] compiling src/tsh_main.tie")
+var rc1 = exec_code("cd /d \"" + root + "\" && ..\\tiec\\compiler\\tiec.exe " + opts + "\"src/tsh_main.tie\"")
+if rc1 != 0 { println("[build] compile failed: src/tsh_main.tie (rc=" + to_string(rc1) + ")") }
+println("[build] compiling src/tedit_embed.tie")
+var rc2 = exec_code("cd /d \"" + root + "\" && ..\\tiec\\compiler\\tiec.exe " + opts + "\"src/tedit_embed.tie\"")
+if rc2 != 0 { println("[build] compile failed: src/tedit_embed.tie (rc=" + to_string(rc2) + ")") }
+println("[build] done: src\\tsh_main.exe (standalone) + src\\tedit_embed.exe (tedit subset)")
+exit 0
