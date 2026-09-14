@@ -1,0 +1,19 @@
+type tie<tsh>
+// DEF3 探针：缺陷③ interp file_exists / mkdir_all 新建路径陈旧伪值
+// 探针方式：对全新路径执行 mkdir_all，随后 file_exists 应立即反映真实存在；
+// 若返回陈旧 false（新建路径伪值），判定缺陷仍在。
+var base = cwd() + "\\probe_c1_dir3"
+var sub = base + "\\nested"
+var m1 = mkdir_all(sub)
+var e1 = file_exists(base)
+var e2 = file_exists(sub)
+if e1 && e2 {
+    println("[PASS] DEF3 new paths visible after mkdir_all")
+    exit(0)
+}
+if e1 {
+    println("[FAIL] DEF3 base visible but nested stale-false (nested file_exists=no)")
+} else {
+    println("[FAIL] DEF3 base stale-false after mkdir_all")
+}
+exit(1)

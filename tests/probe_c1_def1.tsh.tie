@@ -1,0 +1,18 @@
+type tie<tsh>
+// DEF1 探针：缺陷① interp 函数内多局部变量与 exec_* 内建共存（局部槽丢失）
+// 探针方式：函数内声明多个局部变量，调用 exec_code 后再次使用这些局部变量，
+// 若局部槽在 exec_* 后丢失/错乱，返回值将 != 期望。
+func multi(x: i64) -> i64 {
+    var a = x + 1
+    var b = x + 2
+    var rc = exec_code("cmd /c echo def1 >nul")
+    var c = a + b
+    return c
+}
+var r1 = multi(10)
+if r1 == 23 {
+    println("[PASS] DEF1 multi-locals survive exec_* (r1=" + to_string(r1) + ")")
+    exit(0)
+}
+println("[FAIL] DEF1 local slot lost: r1=" + to_string(r1))
+exit(1)

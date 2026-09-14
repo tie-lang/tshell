@@ -1,0 +1,23 @@
+type tie<tsh>
+// DEF4 探针：缺陷④ interp var 偶发 command-not-found 扰行
+// 探针方式：密集声明 var 并夹带其它内建调用（file_exists/exec_code），
+// 观察是否出现 command-not-found 且 var 局部值保持；任一 var 值错乱即判失败。
+var ok: i64 = 0
+var i: i64 = 0
+var last = ""
+while i < 60 {
+    var vProbe = "value" + to_string(i)
+    var _fe = file_exists("def4_placeholder_" + to_string(i))
+    var _rc = exec_code("cmd /c cd >nul")
+    if vProbe != "value" + to_string(i) {
+        ok = ok + 1
+    }
+    last = vProbe
+    i = i + 1
+}
+if ok == 0 {
+    println("[PASS] DEF4 no var command-not-found / no slot corruption over 60 iters (last=" + last + ")")
+    exit(0)
+}
+println("[FAIL] DEF4 var disrupted " + to_string(ok) + "x (last=" + last + ")")
+exit(1)

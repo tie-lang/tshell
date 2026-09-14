@@ -1,0 +1,22 @@
+type tie<tsh>
+// DEF2 探针：缺陷② interp 递归 re-entrancy 残边
+// 探针方式：递归返回后外层局部变量保存值必须保持；若重入共享/污染局部槽，
+// 返回值和期望 306 不符。
+// 推演: reenter(0,300)=300; (1,200)=1+300=301; (2,100)=2+301=303; (3,0)=3+303=306
+func reenter(n: i64, k: i64) -> i64 {
+    var saved = n
+    var tag = k
+    if n > 0 {
+        var inner = reenter(n - 1, k + 100)
+        var sum = saved + inner
+        return sum
+    }
+    return tag
+}
+var r2 = reenter(3, 0)
+if r2 == 306 {
+    println("[PASS] DEF2 re-entrant locals preserved (r2=" + to_string(r2) + ")")
+    exit(0)
+}
+println("[FAIL] DEF2 re-entrancy residual edge: r2=" + to_string(r2))
+exit(1)
