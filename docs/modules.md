@@ -39,8 +39,9 @@ srv ← { zd, repl, sh_util }
 ## 装配子集（按需 include）
 
 - **standalone（全量装配）**：`src/tsh_main.tie`（入口即壳）＝默认全量九模块。
-- **tedit 终端模组嵌入子集**：`src/tedit_embed.tie`＝ lineedit + complete + command
-  + session + render（+ 不装 repl/run/observe 全量；见 docs/embed.md §tedit）。
+- **tedit**：已独立为 `tedit-repo/tedit` 仓（houyangbaoxin2009/TPL 2.2）——内核
+  取 lineedit + complete + command + session + render 子集，自行装配演进；嵌入
+  形态说明见其 docs/architecture.md，tshell 侧原 `src/tedit_embed.tie` 移除。
 - 装配即根入口的 import 集合（tie 静态 import 文本内联）；换装配=换入口文件。
 
 ## 验收/探针
