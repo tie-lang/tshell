@@ -28,18 +28,17 @@ import trm 后经 trm Backend / 对象模型装配模块，获得引擎级 GC / 
 CRC32-IEEE），无需 tie 运行时——`stdin 帧 → 求值 → stdout 帧`。ZD 值语义 + CRC 强
 校验。对接细节见 `docs/srv.md`；往返验收 `tests/smoke_stdio.tsh.tie`（tsh 角色驱动）。
 
-## tedit 终端模组嵌入子集
+## tedit（已独立）
 
-按架构 §12.4，tedit 终端模组 = **取 lineedit + complete + command + session +
-render**（+ repl 可选），**不装 observe / run 全量**。该子集=命令引擎 + 会话 + 行编
-辑/补全/渲染，前端（tiu 终端部件）持有渲染与终端 UI，与引擎只走协议数据。
-
-`src/tedit_embed.tie` 为子集装配示例（命令行驱动，演示仅装配会话层能力）。
+按架构 §12.4 的 tedit 终端模组子集（lineedit + complete + command + session +
+render，+ repl 可选，不装 observe / run 全量）已**独立为 `tedit-repo/tedit`
+仓**（houyangbaoxin2009 / TPL 2.2），内核与插件规范在其 docs/architecture.md。
+tshell 侧原装配示例 `src/tedit_embed.tie` 已移除；tshell 模块仍可作能力模块
+被独立宿主按静态装配取用。
 
 ## 装配协议（最小实现）
 
 - 装配 = 根入口 `import` 集（tie 静态）；`standalone` 入口 = 全量；嵌入者自备宿主，
   只取能力模块。
-- `build.tsh.tie`（tsh 角色，改写自 `build.ps1`）一次构建两种装配：
-  `src/tsh_main.exe`（standalone）+ `src/tedit_embed.exe`
-  （终端模组子集）。
+- `build.tsh.tie`（tsh 角色，改写自 `build.ps1`）构建 standalone 装配：
+  `src/tsh_main.exe`。
