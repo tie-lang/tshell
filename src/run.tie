@@ -257,7 +257,7 @@ func normalize_exit_calls(content: string) -> string {
     return sh_util.u_join(out, "\n")
 }
 
-func normalize_one_exit_line(ln: string, out: table<string>) -> table<string> {
+func normalize_one_exit_line(ln: string, ref out: table<string>) -> table<string> {
     var t = sh_util.u_trim(ln)
     if t == "exit" {
         table_push(out, "exit(0)")

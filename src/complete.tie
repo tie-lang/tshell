@@ -40,7 +40,7 @@ func token_at(line: string, pos: i64) -> string {
 }
 
 // 源 1：当前目录文件/子目录名（前缀匹配）。
-func add_cwd(out: table<string>, prefix: string) {
+func add_cwd(ref out: table<string>, prefix: string) {
     var entries = list_dir(".")
     for e in entries {
         if e == "." || e == ".." {
@@ -53,7 +53,7 @@ func add_cwd(out: table<string>, prefix: string) {
 }
 
 // 源 2：内建命令（前缀匹配）。
-func add_builtin(out: table<string>, prefix: string) {
+func add_builtin(ref out: table<string>, prefix: string) {
     var names = command.c_builtins()
     for n in names {
         if sh_util.u_starts(n, prefix) {
