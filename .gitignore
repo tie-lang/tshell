@@ -18,3 +18,6 @@ Thumbs.db
 # 探针（本地工作材料，不入库）
 tests/probe_*
 tests/smoke_*
+# tpkg 规范
+target/
+_local_only/
