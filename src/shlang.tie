@@ -21,6 +21,7 @@ import "./sh_util.tie"
 import "./command.tie"
 import "./backend_interp.tie"
 import "../../tiej/src/core/execrun.tie"
+import "../../tiej/src/core/fsglob.tie"
 import "../../tiec/compiler/tiep/vval.tie"
 
 // 行结果（结构化）。
@@ -403,6 +404,8 @@ func seg_pack(sw: table<string>, sc: table<i64>, in_f: string, out_f: string, ap
         var fl = "n"
         if sc[i] == 1 {
             fl = "c"
+        } else if sc[i] == 2 {
+            fl = "q"
         }
         sb_append(sb, execrun.enc_field(fl + w))
         i = i + 1
@@ -430,17 +433,15 @@ func seg_words_decode(encw: string) -> (table<string>, table<i64>) {
     while k < wc {
         var (fw, pk) = execrun.fld(encw, pos)
         pos = pk
-        var is_c = false
+        var wkind: i64 = 0
         if len(fw) > 0 && str_byte(fw, 0) == 99 {  // 'c'
-            is_c = true
+            wkind = 1
+        } else if len(fw) > 0 && str_byte(fw, 0) == 113 {  // 'q'
+            wkind = 2
         }
         var body = sh_util.u_sub(fw, 1, str_len(fw))
         table_push(ws, body)
-        if is_c {
-            table_push(cs, 1)
-        } else {
-            table_push(cs, 0)
-        }
+        table_push(cs, wkind)
         k = k + 1
     }
     return (ws, cs)
@@ -563,6 +564,64 @@ func lang_fail_diag(tx: table<string>, verr: string) -> string {
     return verr
 }
 
+// 词解析：代码位（kind=1）与 h 插值求值；未引号普通词（kind=0）做 glob 展开
+// （含 `*`/`?` 且有命中才替换；引号词与命令词不做）。返回 (词表, 错误文本)。
+func resolve_words(ws: table<string>, cs: table<i64>) -> (table<string>, string) {
+    var mid: table<string> = []
+    var marks: table<i64> = []  // 1=代码位结果 2=引号词 0=普通
+    var wi: i64 = 0
+    for wd in ws {
+        if cs[wi] == 1 {
+            var (vd, ve) = eval_expr(wd)
+            if len(ve) > 0 {
+                var emp: table<string> = []
+                return (emp, ve)
+            }
+            table_push(mid, vd)
+            table_push(marks, 1)
+        } else {
+            table_push(mid, wd)
+            if cs[wi] == 2 {
+                table_push(marks, 2)
+            } else {
+                table_push(marks, 0)
+            }
+        }
+        wi = wi + 1
+    }
+    var out: table<string> = []
+    var mi: i64 = 0
+    for wd2 in mid {
+        // 首词（命令词）不做 glob；引号词/代码位结果不做
+        if mi > 0 && marks[mi] == 0 && (has_byte(wd2, 42) || has_byte(wd2, 63)) {
+            var ms = fsglob.glob(wd2)
+            if len(ms) > 0 {
+                for mm in ms {
+                    table_push(out, mm)
+                }
+                mi = mi + 1
+                continue
+            }
+        }
+        table_push(out, wd2)
+        mi = mi + 1
+    }
+    return (out, "")
+}
+
+// 字节包含判定。
+func has_byte(s: string, b: i64) -> bool {
+    var i: i64 = 0
+    var n = len(s)
+    while i < n {
+        if str_byte(s, i) == b {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
 // ==================== 命令语境：解析 + 执行 ====================
 
 func run_command(tx: table<string>, tk: table<i64>, tm: table<i64>, start: i64) -> LineRes {
@@ -591,6 +650,8 @@ func run_command(tx: table<string>, tk: table<i64>, tm: table<i64>, start: i64) 
             table_push(seg_w, tx[i])
             if tm[i] == 1 || tm[i] == 2 {
                 table_push(seg_c, 1)  // 标记待求值（代码位 / h 插值）
+            } else if (tm[i] & 4) != 0 {
+                table_push(seg_c, 2)  // 引号词（glob 阻断）
             } else {
                 table_push(seg_c, 0)
             }
@@ -751,38 +812,19 @@ func run_command(tx: table<string>, tk: table<i64>, tm: table<i64>, start: i64) 
             var k3 = u
             while k3 <= v {
                 var (ws, cs) = seg_words_decode(s_words[k3])
-                // 词解析：代码位 / h 插值求值（filter 谓词体除外）
-                var rw: table<string> = []
+                // 词解析：代码位 / h 插值求值 + glob 展开（filter 谓词体除外）
                 var rerr = ""
                 var skip_code = false
                 if len(ws) > 0 && ws[0] == "filter" {
                     skip_code = true
                 }
+                var rw: table<string> = []
                 if !skip_code {
-                    var wi: i64 = 0
-                    for wd in ws {
-                        if cs[wi] == 1 {
-                            var (vd4, verr4) = eval_expr(wd)
-                            if len(verr4) > 0 {
-                                rerr = verr4
-                                break
-                            }
-                            table_push(rw, vd4)
-                        } else {
-                            table_push(rw, wd)
-                        }
-                        wi = wi + 1
-                    }
+                    var (rw0, e0) = resolve_words(ws, cs)
+                    rw = rw0
+                    rerr = e0
                 } else {
-                    var wi2: i64 = 0
-                    for wd2 in ws {
-                        if cs[wi2] == 1 {
-                            table_push(rw, wd2)
-                        } else {
-                            table_push(rw, wd2)
-                        }
-                        wi2 = wi2 + 1
-                    }
+                    rw = ws
                 }
                 if len(rerr) > 0 {
                     res.out = "tshell: 表达式求值失败: " + rerr
@@ -870,21 +912,11 @@ func run_command(tx: table<string>, tk: table<i64>, tm: table<i64>, start: i64) 
                     var kk = k3
                     while kk <= g {
                         var (ws2, cs2) = seg_words_decode(s_words[kk])
-                        var rw2: table<string> = []
-                        var wj: i64 = 0
-                        for wd3 in ws2 {
-                            if cs2[wj] == 1 {
-                                var (vd5, verr6) = eval_expr(wd3)
-                                if len(verr6) > 0 {
-                                    res.out = "tshell: 表达式求值失败: " + verr6
-                                    res.rc = 1
-                                    return res
-                                }
-                                table_push(rw2, vd5)
-                            } else {
-                                table_push(rw2, wd3)
-                            }
-                            wj = wj + 1
+                        var (rw2, rerr6) = resolve_words(ws2, cs2)
+                        if len(rerr6) > 0 {
+                            res.out = "tshell: 表达式求值失败: " + rerr6
+                            res.rc = 1
+                            return res
                         }
                         var sg = Seg()
                         sg.words = rw2
