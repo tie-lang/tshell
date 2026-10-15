@@ -104,6 +104,27 @@ pub func cwd_join(rel: string) -> string {
     return join_cwd(cwd_norm(g_cwd), rel)
 }
 
+// 当前目录尾名（提示符用；根/空 → 原样/代表串）。
+pub func prompt_dir() -> string {
+    var p = cwd_norm(g_cwd)
+    var n = str_len(p)
+    var start: i64 = 0
+    var i = n - 1
+    while i >= 0 {
+        var c = str_char(p, i)
+        if c == "/" || c == "\\" {
+            start = i + 1
+            break
+        }
+        i = i - 1
+    }
+    var tail = sh_util.u_sub(p, start, n)
+    if str_len(tail) == 0 {
+        return p
+    }
+    return tail
+}
+
 // exit [<N>]：置退出标志并把代码设为 N（缺省 0）。N 解析失败按 0。
 func cmd_exit(args: table<string>) -> string {
     g_exit = true

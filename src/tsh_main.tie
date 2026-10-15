@@ -36,11 +36,20 @@ func main() -> i64 {
     if m0 == "stdio" {
         return srv.srv_stdio()
     }
-    // interactive REPL
+    // interactive REPL（TTY ⇒ 行编辑器；非 TTY ⇒ 逐行直读降级）
     println("tshell 0.1 (p.9.3.1-5: 核心+会话+脚本运行时 + 帧协议 + observe 观测)")
     while !command.ex_req() {
-        print("tie> ")
-        var line = read_line()
+        var pr = "tie:" + command.prompt_dir() + "> "
+        if shlang.rc_last() != 0 {
+            pr = "! " + pr
+        }
+        var line = ""
+        if lineedit.le_active() {
+            line = lineedit.le_read(pr)
+        } else {
+            print(pr)
+            line = read_line()
+        }
         var out = repl.repl_handle(line)
         session.ss_add(line)
         if out != "" {
@@ -49,6 +58,7 @@ func main() -> i64 {
             render.r_emit_line("")
         }
     }
+    lineedit.le_shutdown()
     session.ss_save()
     return 0
 }

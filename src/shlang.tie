@@ -230,7 +230,7 @@ pub func lex_line(t: string) -> (table<string>, table<i64>, table<i64>) {
     var i: i64 = 0
     while i < n {
         var c = str_byte(t, i)
-        if c == 32 || c == 9 {
+        if c == 32 || c == 9 || c == 10 || c == 13 {
             i = i + 1
             continue
         }
@@ -307,7 +307,7 @@ pub func lex_line(t: string) -> (table<string>, table<i64>, table<i64>) {
                 }
                 continue
             }
-            if c2 == 32 || c2 == 9 {
+            if c2 == 32 || c2 == 9 || c2 == 10 || c2 == 13 {
                 break
             }
             if op_at(t, i) > 0 {
@@ -324,6 +324,58 @@ pub func lex_line(t: string) -> (table<string>, table<i64>, table<i64>) {
         }
     }
     return (tx, tk, tm)
+}
+
+// 行完整性：引号闭合且花括号平衡（行编辑器续行判定）。
+pub func line_balanced(line: string) -> bool {
+    var n = len(line)
+    var i: i64 = 0
+    var q: i64 = 0
+    var depth: i64 = 0
+    while i < n {
+        var c = str_byte(line, i)
+        if q != 0 {
+            if q == 39 {
+                if c == 39 {
+                    q = 0
+                }
+            } else {
+                if c == 92 && i + 1 < n {
+                    i = i + 2
+                    continue
+                }
+                if c == 34 {
+                    q = 0
+                }
+            }
+            i = i + 1
+            continue
+        }
+        if c == 34 {
+            q = 34
+            i = i + 1
+            continue
+        }
+        if c == 39 {
+            q = 39
+            i = i + 1
+            continue
+        }
+        if c == 123 {
+            depth = depth + 1
+            i = i + 1
+            continue
+        }
+        if c == 125 {
+            if depth > 0 {
+                depth = depth - 1
+            }
+            i = i + 1
+            continue
+        }
+        i = i + 1
+    }
+    return q == 0 && depth == 0
 }
 
 // ==================== 双语境判定 ====================
@@ -462,6 +514,11 @@ func is_file_like(w: string) -> bool {
 }
 
 // ==================== 行入口 ====================
+
+// 会话最近 rc（提示符状态信号用）。
+pub func rc_last() -> i64 {
+    return g_rc_last
+}
 
 // 处理一行：返回结构化结果（text 为待渲染文本；rc 为最终退出码）。
 pub func sl_run(line: string) -> LineRes {
