@@ -21,6 +21,7 @@ import "../../tiej/src/core/execrun.tie"
 var g_cwd: string = ""
 var g_exit: bool = false
 var g_exit_code: i64 = 0   // 显式退出码（exit <N>，默认 0）
+var g_rc: i64 = 0          // 最近一条内建命令的退出码（0=成功；复合链/rc 变量用）
 
 namespace command {
 
@@ -88,6 +89,21 @@ pub func ex_code() -> i64 {
     return g_exit_code
 }
 
+// 最近内建命令退出码（shlang 复合链 / rc 变量读取）。
+pub func rc_get() -> i64 {
+    return g_rc
+}
+
+// 当前虚拟工作目录（原始值；空串 = 尚未设置 ⇒ 外部命令继承进程 cwd）。
+pub func cwd_get() -> string {
+    return g_cwd
+}
+
+// 相对路径 → 按当前虚拟 cwd 拼接（重定向/输入文件目标用；绝对路径原样）。
+pub func cwd_join(rel: string) -> string {
+    return join_cwd(cwd_norm(g_cwd), rel)
+}
+
 // exit [<N>]：置退出标志并把代码设为 N（缺省 0）。N 解析失败按 0。
 func cmd_exit(args: table<string>) -> string {
     g_exit = true
@@ -103,6 +119,7 @@ func cmd_exit(args: table<string>) -> string {
 
 // 主入口：按 tokens 分派内建命令，返回输出文本。未知命令返回 "?"。
 pub func c_exec(toks: table<string>) -> string {
+    g_rc = 0
     if sh_util.u_len(toks) == 0 {
         return ""
     }
@@ -153,6 +170,7 @@ pub func c_exec(toks: table<string>) -> string {
     if cmd == "exec" {
         return run_external(sh_util.u_join(args, " "))
     }
+    g_rc = 1
     return "?"
 }
 
@@ -199,6 +217,7 @@ func cmd_cd(args: table<string>) -> string {
         dest = join_cwd(dest, args[0])
     }
     if !file_is_dir(dest) {
+        g_rc = 1
         return "cd: no such directory: " + dest
     }
     g_cwd = dest
@@ -222,10 +241,12 @@ func cmd_ls(args: table<string>) -> string {
 
 func cmd_cat(args: table<string>) -> string {
     if sh_util.u_len(args) < 1 {
+        g_rc = 1
         return "cat <file>"
     }
     var path = join_cwd(cwd_norm(g_cwd), args[0])
     if !file_exists(path) {
+        g_rc = 1
         return "cat: no such file: " + args[0]
     }
     return file_read(path)
@@ -234,6 +255,7 @@ func cmd_cat(args: table<string>) -> string {
 // mv/cp/rm：直接经文件系统内置（不再经 cmd 内部命令——move/copy/del 非可执行体）。
 func cmd_fs(op: string, args: table<string>) -> string {
     if sh_util.u_len(args) < 2 && op != "del" {
+        g_rc = 1
         return op + " <src> <dst>"
     }
     var src = join_cwd(cwd_norm(g_cwd), args[0])
@@ -243,17 +265,20 @@ func cmd_fs(op: string, args: table<string>) -> string {
     }
     if op == "move" {
         if !file_move(src, dst) {
+            g_rc = 1
             return "mv: 失败: " + args[0] + " -> " + args[1]
         }
         return ""
     }
     if op == "copy" {
         if !file_copy(src, dst) {
+            g_rc = 1
             return "cp: 失败: " + args[0] + " -> " + args[1]
         }
         return ""
     }
     if !file_delete(src) {
+        g_rc = 1
         return "rm: 失败: " + args[0]
     }
     return ""
@@ -261,10 +286,12 @@ func cmd_fs(op: string, args: table<string>) -> string {
 
 func cmd_source(args: table<string>) -> string {
     if sh_util.u_len(args) < 1 {
+        g_rc = 1
         return "source <file.tie>"
     }
     var path = join_cwd(cwd_norm(g_cwd), args[0])
     if !file_exists(path) {
+        g_rc = 1
         return "source: no such file: " + args[0]
     }
     return backend_interp.b_eval(file_read(path))

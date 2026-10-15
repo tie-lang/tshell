@@ -1,7 +1,6 @@
 type tie<logic>
 import "./sh_util.tie"
 import "./command.tie"
-import "./pipeline.tie"
 import "./repl.tie"
 import "./backend_interp.tie"
 // src/run.tie —— 脚本运行时模块（L0，p.9.3.3）：-e / -f / 脚本 / shebang

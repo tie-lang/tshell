@@ -1,7 +1,6 @@
 type tie<logic>
 import "./repl.tie"
 import "./command.tie"
-import "./pipeline.tie"
 import "./render.tie"
 import "./backend_interp.tie"
 import "./session.tie"
