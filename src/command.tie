@@ -3,14 +3,18 @@ import "./sh_util.tie"
 import "./backend_interp.tie"
 import "./session.tie"
 import "./observe.tie"
+import "../../tiej/src/core/execrun.tie"
 // src/command.tie —— 命令模块（L1）：解析（tie→内建→外部）+ 内建命令集 + 纠错
 // --------------------------------------------------------------
 // 解析优先级（架构 §4）：① tie 表达式 → ② 内建命令（短一致命名）→ ③ 外部命令
 // → ④ 拼写纠错（did-you-mean）。本模块只实现「命令语义」；求值与管道交给
-// repl/pipeline；外部命令经 exec_output（Windows 经 cmd /c 取回输出）。
+// repl/pipeline；外部命令经 **tiej 执行域引擎**（execrun：CreateProcessW 直启、
+// cwd 经 lpCurrentDirectory 直传——不拼接 cd 前缀；启动失败有明确诊断不静默）。
 //
 // EN: command module — parsing priority (tie expr → builtin → external →
-// did-you-mean), a compact builtin command set, and misspelling correction.
+// did-you-mean). External commands run through the tiej execution engine
+// (execrun: direct CreateProcessW with lpCurrentDirectory; no `cd` prefix,
+// explicit startup-failure diagnostics).
 //
 // 状态（文件顶层全局，供本命名空间函数裸名访问）：虚拟 cwd / 退出标志。
 
@@ -227,16 +231,32 @@ func cmd_cat(args: table<string>) -> string {
     return file_read(path)
 }
 
-// mv/cp/rm：经外部 cmd move/copy/del（带 cwd 前缀）。
+// mv/cp/rm：直接经文件系统内置（不再经 cmd 内部命令——move/copy/del 非可执行体）。
 func cmd_fs(op: string, args: table<string>) -> string {
     if sh_util.u_len(args) < 2 && op != "del" {
         return op + " <src> <dst>"
     }
-    var cmdline = op + " \"" + join_cwd(cwd_norm(g_cwd), args[0]) + "\""
+    var src = join_cwd(cwd_norm(g_cwd), args[0])
+    var dst = ""
     if sh_util.u_len(args) >= 2 {
-        cmdline = cmdline + " \"" + join_cwd(cwd_norm(g_cwd), args[1]) + "\""
+        dst = join_cwd(cwd_norm(g_cwd), args[1])
     }
-    return sh_util.u_trim(run_in_dir(cmdline))
+    if op == "move" {
+        if !file_move(src, dst) {
+            return "mv: 失败: " + args[0] + " -> " + args[1]
+        }
+        return ""
+    }
+    if op == "copy" {
+        if !file_copy(src, dst) {
+            return "cp: 失败: " + args[0] + " -> " + args[1]
+        }
+        return ""
+    }
+    if !file_delete(src) {
+        return "rm: 失败: " + args[0]
+    }
+    return ""
 }
 
 func cmd_source(args: table<string>) -> string {
@@ -255,13 +275,18 @@ pub func run_external(cmdline: string) -> string {
     return sh_util.u_trim(run_in_dir(cmdline))
 }
 
+// 经 tiej 执行域引擎执行：词表切分（引号感知）→ capture（cwd 直启，无 cd 前缀）。
+// 启动失败（不在 PATH / 不可执行）返回明确诊断——不静默。
 func run_in_dir(cmdline: string) -> string {
-    var base = cwd_norm(g_cwd)
-    var prefix = ""
-    if base != "" {
-        prefix = "cd /d \"" + base + "\" && "
+    var toks = sh_util.u_split_ws(cmdline)
+    if sh_util.u_len(toks) == 0 {
+        return ""
     }
-    return exec_output(prefix + cmdline)
+    var r = execrun.capture(toks, cwd_norm(g_cwd), "")
+    if !r.started {
+        return "tshell: 无法启动 '" + toks[0] + "'（不在 PATH 或不可执行）"
+    }
+    return r.out + r.err
 }
 
 // ---- did-you-mean（朴素编辑距离）----
