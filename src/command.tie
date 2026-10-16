@@ -90,6 +90,13 @@ pub func ex_req() -> bool {
     return g_exit
 }
 
+// env 导出（`… -> env.NAME`）：进程块 + 落盘（session 按 env.persist 决定）。
+// 返回 0（成功）；失败路径由调用方渲染。
+pub func env_export_do(name: string, value: string) -> i64 {
+    session.ss_env_set(name, value)
+    return 0
+}
+
 // 读取显式退出码（脚本退出时透传给 tshell 进程；默认 0）。
 pub func ex_code() -> i64 {
     return g_exit_code

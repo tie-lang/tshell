@@ -3,6 +3,8 @@ import "./sh_util.tie"
 import "./command.tie"
 import "./repl.tie"
 import "./session.tie"
+import "./render.tie"
+import "./shlang.tie"
 import "./backend_interp.tie"
 // src/run.tie —— 脚本运行时模块（L0，p.9.3.3）：-e / -f / 脚本 / shebang
 // --------------------------------------------------------------
@@ -138,19 +140,150 @@ pub func rn_run_script(path: string) -> i64 {
     // 顶层裸 `exit [N]`（旧式命令形）归一化为 `exit(N)` 表达式形——全文件求值时
     // `exit 7` 非合法 tie 语法；新契约统一为 `exit(n)`。父表达式形 exit(...) 原样透传。
     content = normalize_exit_calls(content)
-    // 整文件求值
-    var out = backend_interp.b_eval_script(content)
-    if backend_interp.b_exit_requested() {
-        return backend_interp.b_exit_code()
+    // 混合脚本判定：任一块为命令语境 ⇒ 行级分派；否则整文件求值（纯 tie 语义
+    // 完全保留：全套两趟注册、先调用后定义等均不变）。
+    if !script_has_command(content) {
+        var out0 = backend_interp.b_eval_script(content)
+        if backend_interp.b_exit_requested() {
+            return backend_interp.b_exit_code()
+        }
+        if out0 != "" {
+            if sh_util.u_starts(out0, "tshell: command not found") {
+                print_err(out0 + "\n")
+            } else {
+                println(out0)
+            }
+        }
+        return 0
     }
-    if out != "" {
-        if sh_util.u_starts(out, "tshell: command not found") {
-            print_err(out + "\n")
+    return run_mixed(content)
+}
+
+// ==================== 混合脚本：行级分派（语言级形态的运行时实现） ====================
+// 块规则：按「引号/括号再平衡」聚合为逻辑块；块按首词判定——
+//   · `var NAME <- …`（捕获）、`… -> env.NAME`（导出）、命令语境首词 ⇒ 交引擎
+//   · 其余 ⇒ tie 求值（b_eval；混合脚本按序求值：先定义后使用）
+// 赋值守卫：第二词为 `=` / `<-` 的行一律按 tie（防 `count = 3` 误判为命令）。
+
+// 任一块为命令语境？
+func script_has_command(content: string) -> bool {
+    var lines = sh_util.u_lines(content)
+    var pending = ""
+    for ln in lines {
+        if len(pending) > 0 {
+            pending = pending + "\n" + ln
         } else {
-            println(out)
+            pending = ln
+        }
+        if shlang.line_balanced(pending) {
+            if chunk_is_command(pending) {
+                return true
+            }
+            pending = ""
+        }
+    }
+    return false
+}
+
+// 逻辑块是否命令语境。
+func chunk_is_command(ch: string) -> bool {
+    var t = sh_util.u_trim(ch)
+    if len(t) == 0 {
+        return false
+    }
+    var (tx2, tk2, tm2) = shlang.lex_line(t)
+    if len(tx2) == 0 {
+        return false
+    }
+    // `var NAME <- …` ⇒ 捕获（命令）
+    if tk2[0] == 0 && tm2[0] == 0 && tx2[0] == "var" && len(tx2) >= 3 {
+        if tk2[2] == 3 {
+            return true
+        }
+        return false
+    }
+    // `… -> env.NAME` ⇒ 导出（命令）
+    var vl = len(tx2) - 1
+    if len(tx2) >= 3 && tk2[vl] == 0 && tm2[vl] == 0 && tk2[vl - 1] == 1 {
+        if sh_util.u_starts(tx2[vl], "env.") {
+            return true
+        }
+    }
+    // 赋值守位：第二词 `=` / `<-` ⇒ tie
+    if len(tx2) >= 2 && tk2[1] == 3 {
+        return false
+    }
+    if len(tx2) >= 2 && tk2[1] == 0 && tx2[1] == "=" {
+        return false
+    }
+    if tk2[0] != 0 {
+        return false
+    }
+    return shlang.looks_like_command(tx2[0])
+}
+
+// 混合脚本主循环。
+func run_mixed(content: string) -> i64 {
+    var lines = sh_util.u_lines(content)
+    var pending = ""
+    var last_val = ""
+    for ln in lines {
+        if len(pending) > 0 {
+            pending = pending + "\n" + ln
+        } else {
+            pending = ln
+        }
+        if !shlang.line_balanced(pending) {
+            continue
+        }
+        var chunk = pending
+        pending = ""
+        if sh_util.u_trim(chunk) == "" {
+            continue
+        }
+        if chunk_is_command(chunk) {
+            var cr = shlang.sl_run(shutil_trim_keep(chunk))
+            if len(cr.out) > 0 {
+                render.r_emit(cr.out)
+            }
+        } else {
+            var out = backend_interp.b_eval(chunk)
+            if backend_interp.b_exit_requested() {
+                return backend_interp.b_exit_code()
+            }
+            if sh_util.u_starts(out, "已定义") {
+                out = ""
+            }
+            if out != "" {
+                last_val = out
+            }
+        }
+    }
+    if sh_util.u_trim(pending) != "" {
+        var out2 = backend_interp.b_eval(pending)
+        if backend_interp.b_exit_requested() {
+            return backend_interp.b_exit_code()
+        }
+        if sh_util.u_starts(out2, "已定义") {
+            out2 = ""
+        }
+        if out2 != "" {
+            last_val = out2
+        }
+    }
+    if last_val != "" {
+        if sh_util.u_starts(last_val, "tshell: command not found") {
+            print_err(last_val + "\n")
+        } else {
+            println(last_val)
         }
     }
     return 0
+}
+
+// 去首尾空白但保留内部换行。
+func shutil_trim_keep(s: string) -> string {
+    return sh_util.u_trim(s)
 }
 
 // 去 tsh 角色头部声明行：连续前导空白行后的 `type tie` 或 `type tie<...>` 声明。

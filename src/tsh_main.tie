@@ -21,6 +21,7 @@ import "./srv.tie"
 func main() -> i64 {
     session.ss_load()
     shlang.sl_init()
+    session.ss_env_load()
     var mode = run.rn_args()
     var m0 = mode[0]
     if m0 == "e" {

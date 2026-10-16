@@ -1,5 +1,6 @@
 type tie<logic>
 import "./sh_util.tie"
+import "../../tiej/src/core/execrun.tie"
 // src/session.tie —— 会话模块（L2，p.9.3.2）：历史持久化 · 配置（td 资产）· 别名
 // --------------------------------------------------------------
 // 架构 §8：td 资产（可读可校验，同源双态纪律）位于 ~/.tshell/：history 历史会话、
@@ -126,6 +127,74 @@ pub func ss_save() {
         body = body + "\n"
     }
     file_write(hist_path(), body)
+}
+
+// ---- 环境面（env.td 落盘；config: env.persist=false 关闭落盘）----
+
+// env.td 路径。
+pub func env_path() -> string {
+    return ss_home() + "/.tshell/env.td"
+}
+
+// 落盘开关（默认开；config: env.persist=false 关闭）。
+pub func env_persist() -> bool {
+    var cfg = ss_load_cfg()
+    return ss_cfg_get(cfg, "env.persist") != "false"
+}
+
+// 写环境：进程块（execrun.env_put：Windows 实时块）+ （开关开时）落盘 env.td。
+pub func ss_env_set(name: string, value: string) {
+    execrun.env_put(name, value)
+    if !env_persist() {
+        return
+    }
+    var lines: table<string> = []
+    var found = false
+    var p = env_path()
+    if file_exists(p) {
+        var rows = sh_util.u_lines(file_read(p))
+        for r in rows {
+            var eq = find_eq(r)
+            if eq > 0 && sh_util.u_sub(r, 0, eq) == name {
+                table_push(lines, name + "=" + value)
+                found = true
+            } else if sh_util.u_trim(r) != "" {
+                table_push(lines, r)
+            }
+        }
+    }
+    if !found {
+        table_push(lines, name + "=" + value)
+    }
+    var body = sh_util.u_join(lines, "\n")
+    if sh_util.u_len(lines) > 0 {
+        body = body + "\n"
+    }
+    var dir = ss_home() + "/.tshell"
+    if !file_is_dir(dir) {
+        var _mk = mkdir_all(dir)
+    }
+    file_write(env_path(), body)
+}
+
+// 启动装载（env.persist=false 时跳过）。
+pub func ss_env_load() {
+    if !env_persist() {
+        return
+    }
+    var p = env_path()
+    if !file_exists(p) {
+        return
+    }
+    var rows = sh_util.u_lines(file_read(p))
+    for r in rows {
+        var eq = find_eq(r)
+        if eq > 0 {
+            var nm = sh_util.u_sub(r, 0, eq)
+            var vl = sh_util.u_sub(r, eq + 1, str_len(r))
+            execrun.env_put(nm, vl)
+        }
+    }
 }
 
 // ---- 配置（td 资产；文本文件形态，键=值 行）----

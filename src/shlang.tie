@@ -37,6 +37,7 @@ var g_alias_values: table<string> = []
 var g_prompt_prefix: string = "tie:"    // 提示符前缀（config: prompt.prefix）
 var g_strict: bool = false              // 严格模式（config: strict=true；命令失败即中止）
 var g_alias_depth: i64 = 0              // 别名展开递归深度护栏
+var g_cap_mode: bool = false            // 捕获模式（`var x <- …`：末段强制捕获不直通）
 
 namespace shlang {
 
@@ -366,12 +367,12 @@ pub func line_balanced(line: string) -> bool {
             i = i + 1
             continue
         }
-        if c == 123 {
+        if c == 123 || c == 40 || c == 91 {  // { ( [
             depth = depth + 1
             i = i + 1
             continue
         }
-        if c == 125 {
+        if c == 125 || c == 41 || c == 93 {  // } ) ]
             if depth > 0 {
                 depth = depth - 1
             }
@@ -386,7 +387,7 @@ pub func line_balanced(line: string) -> bool {
 // ==================== 双语境判定 ====================
 
 // 词是否使行落入命令语境（内建 / 谓词 / 路径分隔 / 存在 / PATH 命中 + 常见扩展）。
-func looks_like_command(w: string) -> bool {
+pub func looks_like_command(w: string) -> bool {
     if len(w) == 0 {
         return false
     }
@@ -587,6 +588,146 @@ func alias_lookup(name: string) -> string {
     return ""
 }
 
+// env 引用（`env.IDENT`）。
+func is_env_ref(w: string) -> bool {
+    if str_len(w) < 5 {
+        return false
+    }
+    if !has_pref(w, "env.") {
+        return false
+    }
+    return ident_ok(sh_util.u_sub(w, 4, str_len(w)))
+}
+
+// 标识符校验（ASCII）。
+func ident_ok(n: string) -> bool {
+    var l = str_len(n)
+    if l == 0 {
+        return false
+    }
+    var i: i64 = 0
+    while i < l {
+        var c = str_byte(n, i)
+        var is_al = (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95
+        var is_dg = c >= 48 && c <= 57
+        if i == 0 && !is_al {
+            return false
+        }
+        if !is_al && !is_dg {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+// `var NAME <- <命令/文件>`：捕获右端输出为文本注入会话变量（去尾部换行）。
+func var_capture(tx: table<string>, tk: table<i64>, tm: table<i64>) -> LineRes {
+    var res = LineRes()
+    var name = tx[1]
+    if !ident_ok(name) {
+        res.out = "tshell: 捕获变量名非法: '" + name + "'"
+        res.rc = 2
+        return strict_apply(res)
+    }
+    // 单文件字面量：直接读文件
+    if len(tx) == 4 && tk[3] == 0 && tm[3] == 0 && is_file_like(tx[3]) {
+        var fp = tx[3]
+        if file_exists(command.cwd_join(fp)) {
+            var fdata = file_read(command.cwd_join(fp))
+            res.out = inject_var(name, strip_tail_nl(fdata))
+            res.rc = 0
+            return strict_apply(res)
+        }
+    }
+    var rest = reconstruct_rest(tx, tk, tm, 3)
+    g_cap_mode = true
+    var cr = sl_run(rest)
+    g_cap_mode = false
+    if cr.rc != 0 && len(cr.out) == 0 {
+        res.out = "tshell: 捕获失败（rc=" + to_string(cr.rc) + "）"
+        res.rc = cr.rc
+        return strict_apply(res)
+    }
+    res.out = inject_var(name, strip_tail_nl(cr.out))
+    res.rc = cr.rc
+    return strict_apply(res)
+}
+
+// 注入会话变量（首写 var、其后赋值——tiep 重声明 no-op 纪律）。
+func inject_var(name: string, val: string) -> string {
+    var lit = "var " + name + " = \"" + esc_q(val) + "\""
+    var _r = backend_interp.b_eval(lit)
+    return ""
+}
+
+// tie 字面量转义（\ " 换行）。
+func esc_q(s: string) -> string {
+    var out = ""
+    var n = str_len(s)
+    var i: i64 = 0
+    while i < n {
+        var c = str_char(s, i)
+        if c == "\\" {
+            out = out + "\\\\"
+        } else if c == "\"" {
+            out = out + "\\\""
+        } else if c == "\n" {
+            out = out + "\\n"
+        } else if c == "\r" {
+            out = out + "\\r"
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// 去尾部换行（\n / \r）。
+func strip_tail_nl(s: string) -> string {
+    var out = s
+    while true {
+        var l = str_len(out)
+        if l == 0 {
+            return out
+        }
+        var c = str_char(out, l - 1)
+        if c == "\n" || c == "\r" {
+            out = sh_util.u_sub(out, 0, l - 1)
+        } else {
+            return out
+        }
+    }
+    return out
+}
+
+// `… -> env.NAME`：左端求值（tie 表达式；失败回落命令捕获）→ set_env + 落盘。
+func env_export(tx: table<string>, tk: table<i64>, tm: table<i64>, vend: i64) -> LineRes {
+    var res = LineRes()
+    var name = sh_util.u_sub(tx[vend], 4, str_len(tx[vend]))
+    var left = reconstruct_range(tx, tk, tm, 0, vend - 1)
+    left = sh_util.u_trim(left)
+    // 左端不含算子/引号外多余结构时先按 tie 表达式；失败回落命令捕获
+    var (vd, verr) = eval_expr(left)
+    var val = vd
+    if len(verr) > 0 {
+        g_cap_mode = true
+        var cr = sl_run(left)
+        g_cap_mode = false
+        if cr.rc != 0 {
+            res.out = "tshell: env 导出失败（左端既非表达式也非可运行命令）: " + left
+            res.rc = 1
+            return strict_apply(res)
+        }
+        val = cr.out
+    }
+    var _sv = command.env_export_do(name, val)
+    res.out = ""
+    res.rc = 0
+    return strict_apply(res)
+}
+
 // 严格模式守卫（config: strict=true）：命令失败即中止（供脚本/管道驱动使用）。
 // 覆盖 sl_run 的主要出口（含「无法启动」与语言语境失败路径）。
 func strict_apply(r: LineRes) -> LineRes {
@@ -608,6 +749,17 @@ pub func sl_run(line: string) -> LineRes {
     var (tx, tk, tm) = lex_line(t)
     if len(tx) == 0 {
         return res
+    }
+    // `var NAME <- <命令/文件>`：捕获（语言级形态、运行时实现；设计 §3.2）
+    if tk[0] == 0 && tm[0] == 0 && tx[0] == "var" && len(tx) >= 3 {
+        if tk[1] == 0 && tm[1] == 0 && tk[2] == 3 {
+            return var_capture(tx, tk, tm)
+        }
+    }
+    // `… -> env.NAME`：导出（送出语义）
+    var vend = len(tx) - 1
+    if len(tx) >= 3 && tk[vend] == 0 && tm[vend] == 0 && tk[vend - 1] == 1 && is_env_ref(tx[vend]) {
+        return env_export(tx, tk, tm, vend)
     }
     // 别名展开（首词为普通词；递归深度护栏）
     if tk[0] == 0 && tm[0] == 0 && g_alias_depth < 8 {
@@ -691,6 +843,10 @@ pub func sl_run(line: string) -> LineRes {
 // 否则原样给出求值错误。
 func lang_fail_diag(tx: table<string>, verr: string) -> string {
     var w0 = tx[0]
+    // 赋值形（第二词 `=`）保持原始求值错误（"变量未声明"更贴切，不转命令诊断）
+    if len(tx) > 1 && tx[1] == "=" {
+        return verr
+    }
     var looks = false
     if len(tx) > 1 && tx[1] != "|" && tx[1] != "&&" && tx[1] != "||" && tx[1] != ";" {
         looks = true
@@ -717,7 +873,16 @@ func resolve_words(ws: table<string>, cs: table<i64>) -> (table<string>, string)
     var wi: i64 = 0
     for wd in ws {
         if cs[wi] == 1 {
-            var (vd, ve) = eval_expr(wd)
+            // `{env.NAME}` 读环境变量（设计 §3.2：读 {env.PATH}）——经 command.env_get
+            // 直读（Windows 实时块；tie get_env 内置读 CRT 快照，旧账）
+            if is_env_ref(wd) {
+                table_push(mid, execrun.env_get(sh_util.u_sub(wd, 4, str_len(wd))))
+                table_push(marks, 1)
+                wi = wi + 1
+                continue
+            }
+            var expr = wd
+            var (vd, ve) = eval_expr(expr)
             if len(ve) > 0 {
                 var emp: table<string> = []
                 return (emp, ve)
@@ -756,11 +921,15 @@ func resolve_words(ws: table<string>, cs: table<i64>) -> (table<string>, string)
     return (out, "")
 }
 
-// 从 tok 序列 from 起重建成行（别名展开用；代码位重包花括号、引号词重包引号）。
+// 从 tok 序列 [from, to) 重建为行（代码位重包花括号、引号词重包引号）。
 func reconstruct_rest(tx: table<string>, tk: table<i64>, tm: table<i64>, from: i64) -> string {
+    return reconstruct_range(tx, tk, tm, from, len(tx))
+}
+
+func reconstruct_range(tx: table<string>, tk: table<i64>, tm: table<i64>, from: i64, to: i64) -> string {
     var out = ""
     var i = from
-    while i < len(tx) {
+    while i < to {
         var piece = ""
         if tk[i] == 0 {
             if tm[i] == 1 {
@@ -1141,8 +1310,8 @@ func run_command(tx: table<string>, tk: table<i64>, tm: table<i64>, start: i64) 
                             sg.has_feed = true
                             sg.feed = carry
                         }
-                        if kk == g && g < v {
-                            sg.cap_out = true  // 段组未完（后续段需数据）⇒ 捕获
+                        if kk == g && (g < v || g_cap_mode) {
+                            sg.cap_out = true  // 段组未完或捕获模式 ⇒ 捕获（不直通）
                         }
                         table_push(encs, execrun.enc(sg))
                         kk = kk + 1
@@ -1156,7 +1325,7 @@ func run_command(tx: table<string>, tk: table<i64>, tm: table<i64>, start: i64) 
                         g_rc_last = rc_prev
                     }
                     if lr.started {
-                        if g < v {
+                        if g < v || g_cap_mode {
                             carry = lr.out
                             carry_valid = true
                         } else {
