@@ -29,8 +29,8 @@ tshell 核心用 **tie 语言**编写，REPL 求值内核**复用 tiec 自举解
 ```powershell
 # 一次构建两装配（standalone + tedit 终端模组子集）
 # build.tsh.tie 是 tsh 角色自举构建驱动（tie/tsh 改写自 build.ps1）：
-# 须用独立装配实例运行（构建会重写 src\tsh_main.exe，不可用其自身实例）
-src\tsh_main.exe -f build.tsh.tie
+# 须用独立装配实例运行（构建会重写产物，不可用其自身实例）
+_local_only\bin\tsh_main.exe -f build.tsh.tie
 # 或直接用 tiec 编译装配入口（--no-cache 强制重编）
 ..\tiec\compiler\tiec.exe --no-cache src\tsh_main.tie
 ```
@@ -38,10 +38,10 @@ src\tsh_main.exe -f build.tsh.tie
 ## 运行 / Run
 
 ```powershell
-src\tsh_main.exe            # 交互 REPL
-src\tsh_main.exe -e "1+2"   # 单行求值（输出 3）
-src\tsh_main.exe -f x.tie   # 脚本文件（p.9.3.3 run，含 shebang）
-src\tsh_main.exe --stdio    # tink 帧协议服务（p.9.3.4 srv）
+_local_only\bin\tsh_main.exe            # 交互 REPL
+_local_only\bin\tsh_main.exe -e "1+2"   # 单行求值（输出 3）
+_local_only\bin\tsh_main.exe -f x.tie   # 脚本文件（p.9.3.3 run，含 shebang）
+_local_only\bin\tsh_main.exe --stdio    # tink 帧协议服务（p.9.3.4 srv）
 ```
 
 REPL 解析优先级（架构 §4）：**tie 表达式 → 内建命令 → 外部命令 → 拼写纠错**
