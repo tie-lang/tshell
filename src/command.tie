@@ -239,6 +239,7 @@ func cmd_help(args: table<string>) -> string {
     if sh_util.u_len(args) == 0 {
         return "tshell 内建命令: cd pwd ls cat echo mv cp rm set source exec history alias observe help exit\n" +
             "  help <命令> 查看单项用法与示例； help * 打印全部逐项帮助（cmd 风格全量表）\n" +
+            "  符号: [ ] 可选 · < > 必填占位 · | 二选一 · … 可重复（help * 开头有详解）\n" +
             "  数据流: '->'（管道/送出）'->>'（追加）'<-'（输入）'2->'（错误）；复合: '&&' '||' ';'\n" +
             "  外部命令经 PATH 检索直启；别名见 'alias'；变量面（rc/argv/代码位）见 help *。"
     }
@@ -362,6 +363,13 @@ func help_one(cmd: string) -> string {
 func help_all() -> string {
     var names = builtin_names()
     var out = "tshell 内建命令逐项帮助（单项: help <命令>）\n"
+    out = out + "\n【符号约定】\n"
+    out = out + "  [x]       可选部分——可省略。例: cd [dir]（cd 或 cd 某目录，都合法）\n"
+    out = out + "  <x>       必填占位——换成实际值。例: cat <file>（file 处写真实文件名）\n"
+    out = out + "  a | b     二选一。例: set eval-backend interp|trm（选其一）\n"
+    out = out + "  x…        可重复。例: echo <词…>（任意多个词）\n"
+    out = out + "  '->' 等   字面记号——原样输入，不是占位（引号只是本文档的强调写法）\n"
+    out = out + "  合读示例: mv <src> <dst> 即『mv 空格 源 空格 目标』，如 mv a.txt b.txt。\n"
     out = out + "\n【索引】\n"
     for n in names {
         out = out + "  " + pad_name(n) + help_desc(n) + "\n"
