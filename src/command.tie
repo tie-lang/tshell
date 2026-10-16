@@ -234,65 +234,165 @@ func cmd_observe(args: table<string>) -> string {
     return "observe: unknown subcommand '" + sub + "'"
 }
 
+// 帮助（三档）：help 总览 / help <命令> 单项 / help * 全量逐项（cmd 风格）。
 func cmd_help(args: table<string>) -> string {
     if sh_util.u_len(args) == 0 {
-        return "内建命令: cd pwd ls cat echo mv cp rm set source exec history alias help exit\n" +
-            "别名: alias [name=value]（持久于 ~/.tshell/config.td；应用见引擎配置面）\n" +
-            "外部命令经 PATH 检索直启；数据流: '->'（管道/送出）'->>'（追加）'<-'（输入）'2->'（错误）；\n" +
-            "复合: '&&'（成功续）'||'（失败续）';'（顺序）\n" +
-            "用 'help <命令>' 查看单命令用法与示例。"
+        return "tshell 内建命令: cd pwd ls cat echo mv cp rm set source exec history alias observe help exit\n" +
+            "  help <命令> 查看单项用法与示例； help * 打印全部逐项帮助（cmd 风格全量表）\n" +
+            "  数据流: '->'（管道/送出）'->>'（追加）'<-'（输入）'2->'（错误）；复合: '&&' '||' ';'\n" +
+            "  外部命令经 PATH 检索直启；别名见 'alias'；变量面（rc/argv/代码位）见 help *。"
+    }
+    if args_at(args, 0) == "*" {
+        return help_all()
     }
     return help_one(args_at(args, 0))
 }
 
-// 单命令用法与示例（§5.4：每内建具备 usage 与示例）。
-func help_one(cmd: string) -> string {
+// 一行说明（索引与单项首行共用）。
+func help_desc(cmd: string) -> string {
     if cmd == "cd" {
-        return "cd [dir]\n  切目录（无参显示当前）。例: cd ../tiec"
+        return "切换当前目录（无参显示当前）"
     }
     if cmd == "pwd" {
-        return "pwd\n  显示当前目录。例: pwd"
+        return "显示当前目录"
     }
     if cmd == "ls" {
-        return "ls [dir]\n  列目录（支持通配展开前的字面路径）。例: ls src"
+        return "列出目录内容"
     }
     if cmd == "cat" {
-        return "cat <file>\n  读文件全文。例: cat tpkg.config.td"
+        return "打印文件内容"
     }
     if cmd == "echo" {
-        return "echo <词…>\n  回显（代码位/h 插值在其中求值）。例: echo h\"共 {1 + 1} 个\""
+        return "回显参数（代码位/h 插值在此求值）"
     }
     if cmd == "mv" {
-        return "mv <src> <dst>\n  移动/改名。例: mv a.txt b.txt"
+        return "移动/重命名文件"
     }
     if cmd == "cp" {
-        return "cp <src> <dst>\n  复制。例: cp a.txt b.txt"
+        return "复制文件"
     }
     if cmd == "rm" {
-        return "rm <file>\n  删除。例: rm tmp.txt"
+        return "删除文件"
     }
     if cmd == "set" {
-        return "set <NAME> <VALUE> | set eval-backend interp|trm\n  设环境变量 / 求值后端。例: set MYVAR 1"
+        return "设置环境变量 / 求值后端"
     }
     if cmd == "source" {
-        return "source <file.tie>\n  求值 tie 源文件（入当前会话）。例: source rc.tie"
+        return "求值 tie 源文件（入当前会话）"
     }
     if cmd == "exec" {
-        return "exec <命令…> | exec {表达式}\n  强制命令语境 / 动态命令。例: exec {cmdvar} --help"
+        return "强制命令语境执行（支持动态命令）"
     }
     if cmd == "history" {
-        return "history\n  列出本次会话历史。例: history"
+        return "列出会话历史"
     }
     if cmd == "alias" {
-        return "alias [name=value]\n  列出/定义别名（持久 ~/.tshell/config.td）。例: alias ll=ls src"
+        return "列出/定义别名（持久 config.td）"
+    }
+    if cmd == "observe" {
+        return "求值后端观测面（backend/disasm/step/dynload）"
     }
     if cmd == "help" {
-        return "help [命令]\n  帮助总览 / 单命令用法。例: help cd"
+        return "帮助总览 / 单项 / 全量"
     }
     if cmd == "exit" {
-        return "exit [N]\n  退出（可选退出码）。例: exit 0"
+        return "退出会话（可选退出码）"
     }
-    return "help: 未知命令 '" + cmd + "'（help 查看内建列表）"
+    return ""
+}
+
+// 单项帮助：说明 + 用法 + 示例。
+func help_one(cmd: string) -> string {
+    var d = help_desc(cmd)
+    if d == "" {
+        return "help: 未知命令 '" + cmd + "'（help 查看内建列表；help * 全量逐项）"
+    }
+    if cmd == "cd" {
+        return "cd — " + d + "\n  用法: cd [dir]\n  例: cd ../tiec"
+    }
+    if cmd == "pwd" {
+        return "pwd — " + d + "\n  用法: pwd\n  例: pwd"
+    }
+    if cmd == "ls" {
+        return "ls — " + d + "\n  用法: ls [dir]\n  例: ls src"
+    }
+    if cmd == "cat" {
+        return "cat — " + d + "\n  用法: cat <file>\n  例: cat tpkg.config.td"
+    }
+    if cmd == "echo" {
+        return "echo — " + d + "\n  用法: echo <词…>\n  例: echo h\"共 {1 + 1} 个\""
+    }
+    if cmd == "mv" {
+        return "mv — " + d + "\n  用法: mv <src> <dst>\n  例: mv a.txt b.txt"
+    }
+    if cmd == "cp" {
+        return "cp — " + d + "\n  用法: cp <src> <dst>\n  例: cp a.txt b.txt"
+    }
+    if cmd == "rm" {
+        return "rm — " + d + "\n  用法: rm <file>\n  例: rm tmp.txt"
+    }
+    if cmd == "set" {
+        return "set — " + d + "\n  用法: set <NAME> <VALUE>  |  set eval-backend interp|trm\n  例: set MYVAR 1"
+    }
+    if cmd == "source" {
+        return "source — " + d + "\n  用法: source <file.tie>\n  例: source rc.tie"
+    }
+    if cmd == "exec" {
+        return "exec — " + d + "\n  用法: exec <命令…>  |  exec {表达式}（动态命令）\n  例: exec {cmdvar} --help"
+    }
+    if cmd == "history" {
+        return "history — " + d + "\n  用法: history\n  例: history"
+    }
+    if cmd == "alias" {
+        return "alias — " + d + "\n  用法: alias  |  alias name=value\n  例: alias ll=ls -> count"
+    }
+    if cmd == "observe" {
+        return "observe — " + d + "\n  用法: observe [backend|disasm|step|dynload]\n  例: observe backend"
+    }
+    if cmd == "help" {
+        return "help — " + d + "\n  用法: help  |  help <命令>  |  help *\n  例: help *"
+    }
+    if cmd == "exit" {
+        return "exit — " + d + "\n  用法: exit [N]\n  例: exit 0"
+    }
+    return "help: 未知命令 '" + cmd + "'"
+}
+
+// 全量逐项帮助（cmd 风格）：索引 → 逐项 → 总则（记号/外部/变量面/别名）。
+func help_all() -> string {
+    var names = builtin_names()
+    var out = "tshell 内建命令逐项帮助（单项: help <命令>）\n"
+    out = out + "\n【索引】\n"
+    for n in names {
+        out = out + "  " + pad_name(n) + help_desc(n) + "\n"
+    }
+    out = out + "\n【逐项】\n"
+    for n2 in names {
+        out = out + "\n" + help_one(n2) + "\n"
+    }
+    out = out + "\n【记号与复合】\n"
+    out = out + "  '->' 送出（管道；右端为文件则重定向写入）   '->>' 追加重定向\n"
+    out = out + "  '<-' 输入来源（文件内容作 stdin）   '2->' 错误通道（文件；'2-> stdout' 合流）\n"
+    out = out + "  '&&' 成功续跑   '||' 失败续跑   ';' 顺序执行（rc 驱动；被跳过段不算结果）\n"
+    out = out + "  命令语境 '|' 不是管道（会提示改用 '->'；集合并仅语言语境）\n"
+    out = out + "\n【外部命令】\n"
+    out = out + "  首词含路径分隔或 PATH 命中即可执行（直启、无 shell 借用）；\n"
+    out = out + "  启动失败给出检索结论（'无法启动 …（不在 PATH 或不可执行）'）。\n"
+    out = out + "\n【变量面】\n"
+    out = out + "  {表达式} 代码位（求值为单个参数）； h\"…{…}…\" 插值；\n"
+    out = out + "  {rc} 最近退出码； {argv[1..]} 脚本参数（argv[0]=脚本路径）。\n"
+    out = out + "\n【别名】\n"
+    out = out + "  alias name=value 持久于 ~/.tshell/config.td；下一行即生效（含 '->' 等算子）。\n"
+    return out
+}
+
+// 名称列对齐（索引用）。
+func pad_name(n: string) -> string {
+    var out = n
+    while str_len(out) < 10 {
+        out = out + " "
+    }
+    return out
 }
 
 func cmd_cd(args: table<string>) -> string {

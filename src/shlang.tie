@@ -736,9 +736,11 @@ func resolve_words(ws: table<string>, cs: table<i64>) -> (table<string>, string)
     }
     var out: table<string> = []
     var mi: i64 = 0
+    // help 的实参不做 glob（`help *` 需要字面 `*`；引号写法照常阻断）
+    var no_glob = len(ws) > 0 && ws[0] == "help"
     for wd2 in mid {
         // 首词（命令词）不做 glob；引号词/代码位结果不做
-        if mi > 0 && marks[mi] == 0 && (has_byte(wd2, 42) || has_byte(wd2, 63)) {
+        if mi > 0 && marks[mi] == 0 && !no_glob && (has_byte(wd2, 42) || has_byte(wd2, 63)) {
             var ms = fsglob.glob(wd2)
             if len(ms) > 0 {
                 for mm in ms {
