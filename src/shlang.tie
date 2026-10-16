@@ -1195,13 +1195,13 @@ func alias_cmd(args: table<string>) -> string {
         if len(g_alias_names) == 0 {
             return "（无别名；用法: alias name=value —— 例: alias ll=ls src）"
         }
-        var out2 = ""
+        var rows: table<string> = []
         var i: i64 = 0
         for nm in g_alias_names {
-            out2 = out2 + "alias " + nm + "=" + g_alias_values[i] + "\n"
+            table_push(rows, "alias " + nm + "=" + g_alias_values[i])
             i = i + 1
         }
-        return sh_util.u_trim(out2)
+        return command.hl_lines(rows)
     }
     // name=value 或 name value…
     var joined = ""

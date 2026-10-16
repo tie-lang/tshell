@@ -10,6 +10,41 @@ type tie<logic>
 namespace sh_util {
 
 // 去除首尾空白（空格/\t/\r/\n）。
+// 显示宽度：宽字符（CJK 等常用区）2，其余 1；Tab 记 4。
+pub func ch_width(s: string) -> i64 {
+    if str_len(s) == 0 {
+        return 0
+    }
+    var cp = char_code(s)
+    if cp == 9 {
+        return 4
+    }
+    if cp < 0x1100 {
+        return 1
+    }
+    if (cp >= 0x1100 && cp <= 0x115F) || (cp >= 0x2E80 && cp <= 0x303E) ||
+       (cp >= 0x3041 && cp <= 0x33FF) || (cp >= 0x3400 && cp <= 0x4DBF) ||
+       (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0xA000 && cp <= 0xA4CF) ||
+       (cp >= 0xAC00 && cp <= 0xD7A3) || (cp >= 0xF900 && cp <= 0xFAFF) ||
+       (cp >= 0xFE30 && cp <= 0xFE4F) || (cp >= 0xFF00 && cp <= 0xFF60) ||
+       (cp >= 0xFFE0 && cp <= 0xFFE6) || (cp >= 0x20000 && cp <= 0x3FFFD) {
+        return 2
+    }
+    return 1
+}
+
+// 字符串显示宽度。
+pub func str_width(s: string) -> i64 {
+    var w: i64 = 0
+    var n = str_len(s)
+    var i: i64 = 0
+    while i < n {
+        w = w + ch_width(str_char(s, i))
+        i = i + 1
+    }
+    return w
+}
+
 pub func u_trim(s: string) -> string {
     var n = str_len(s)
     var lo: i64 = 0

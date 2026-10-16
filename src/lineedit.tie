@@ -24,8 +24,6 @@ var g_buf: string = ""
 var g_cur: i64 = 0          // 光标在 buffer 中的位置（码点索引）
 var g_hist_idx: i64 = 0     // 当前历史游标（-1 = 不在历史回放中）
 var g_hist_now: string = "" // 进入历史回放时的原始输入缓存
-var g_path_cache: table<string> = []
-var g_path_ready: bool = false
 var g_vt: bool = false        // VT 可用（le_read 探测；不可用则降级朴素渲染）
 var g_hl_off: bool = false    // config: ui.hl=false ⇒ 关闭高亮与两遍实测渲染（朴素重绘安全阀）
 var g_hl_load: bool = false   // 配置读取一次性标记
@@ -192,40 +190,6 @@ pub func le_shutdown() {
     term.raw_off()
 }
 
-// 显示宽度：宽字符（CJK 等常用区）2，其余 1；Tab 记 4。
-func ch_width(s: string) -> i64 {
-    if str_len(s) == 0 {
-        return 0
-    }
-    var cp = char_code(s)
-    if cp == 9 {
-        return 4
-    }
-    if cp < 0x1100 {
-        return 1
-    }
-    if (cp >= 0x1100 && cp <= 0x115F) || (cp >= 0x2E80 && cp <= 0x303E) ||
-       (cp >= 0x3041 && cp <= 0x33FF) || (cp >= 0x3400 && cp <= 0x4DBF) ||
-       (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0xA000 && cp <= 0xA4CF) ||
-       (cp >= 0xAC00 && cp <= 0xD7A3) || (cp >= 0xF900 && cp <= 0xFAFF) ||
-       (cp >= 0xFE30 && cp <= 0xFE4F) || (cp >= 0xFF00 && cp <= 0xFF60) ||
-       (cp >= 0xFFE0 && cp <= 0xFFE6) || (cp >= 0x20000 && cp <= 0x3FFFD) {
-        return 2
-    }
-    return 1
-}
-
-func str_width(s: string) -> i64 {
-    var w: i64 = 0
-    var n = str_len(s)
-    var i: i64 = 0
-    while i < n {
-        w = w + ch_width(str_char(s, i))
-        i = i + 1
-    }
-    return w
-}
-
 // ESC 字符（tie 字面量无 \x 转义，按码点构造）。
 func esc_s() -> string {
     return str_from_code(27)
@@ -247,51 +211,6 @@ func starts_with(s: string, pre: string) -> bool {
     return true
 }
 
-// PATH 可执行名缓存（首次 Tab 惰建；os 感知分隔符）。
-func path_build() {
-    if g_path_ready {
-        return
-    }
-    g_path_ready = true
-    var sep: i64 = 58
-    if get_env("OS") == "Windows_NT" {
-        sep = 59
-    }
-    var pp = get_env("PATH")
-    var n = len(pp)
-    var sb = string_builder()
-    var i: i64 = 0
-    while i <= n {
-        var brk = false
-        if i == n {
-            brk = true
-        } else {
-            var c2 = str_byte(pp, i)
-            if c2 == sep {
-                brk = true
-            }
-        }
-        if brk {
-            var seg = sb_build(sb)
-            if len(seg) > 0 && file_is_dir(seg) {
-                var es = list_dir(seg)
-                for e in es {
-                    if len(e) > 4 {
-                        var tail = sh_util.u_sub(e, str_len(e) - 4, str_len(e))
-                        if tail == ".exe" || tail == ".cmd" || tail == ".bat" || tail == ".com" {
-                            table_push(g_path_cache, sh_util.u_sub(e, 0, str_len(e) - 4))
-                        }
-                    }
-                }
-            }
-            sb = string_builder()
-        } else {
-            sb_append_byte(sb, str_byte(pp, i))
-        }
-        i = i + 1
-    }
-}
-
 // 首词候选：内建/谓词 → PATH 可执行。
 func cands_first(word: string) -> table<string> {
     var out: table<string> = []
@@ -308,8 +227,7 @@ func cands_first(word: string) -> table<string> {
         }
     }
     if len(out) == 0 {
-        path_build()
-        for e2 in g_path_cache {
+        for e2 in command.path_exes() {
             if starts_with(e2, word) {
                 table_push(out, e2)
             }
@@ -382,212 +300,7 @@ func common_prefix(cs: table<string>) -> string {
     return pre
 }
 
-// ---- 语法高亮（2026-10-16 深化） ----
-
-// 操作符识别（码点级；返回长度，0=非操作符）。
-func op_len_cp(s: string, i: i64) -> i64 {
-    var n = str_len(s)
-    var c = str_char(s, i)
-    if c == "-" {
-        if i + 1 < n && str_char(s, i + 1) == ">" {
-            if i + 2 < n && str_char(s, i + 2) == ">" {
-                return 3
-            }
-            return 2
-        }
-    }
-    if c == "<" {
-        if i + 1 < n && str_char(s, i + 1) == "-" {
-            return 2
-        }
-    }
-    if c == "2" {
-        if i + 2 < n && str_char(s, i + 1) == "-" && str_char(s, i + 2) == ">" {
-            return 3
-        }
-    }
-    if c == "&" {
-        if i + 1 < n && str_char(s, i + 1) == "&" {
-            return 2
-        }
-    }
-    if c == "|" {
-        if i + 1 < n && str_char(s, i + 1) == "|" {
-            return 2
-        }
-        return 1
-    }
-    if c == ";" {
-        return 1
-    }
-    return 0
-}
-
-// 谓词/内建判定（高亮命令位用）。
-func is_cmdword(w: string) -> bool {
-    if command.c_is_builtin(w) {
-        return true
-    }
-    if w == "filter" || w == "count" || w == "parse" {
-        return true
-    }
-    return false
-}
-
-// 词是否 PATH 可执行（依补全缓存）。
-func word_is_exe(w: string) -> bool {
-    path_build()
-    for e in g_path_cache {
-        if e == w {
-            return true
-        }
-    }
-    return false
-}
-
-// 语法高亮渲染：返回 (着色文本, 光标可见列)。
-// 命令位 = 行首或数据流算子（-> && || ; |）之后；内建/谓词亮绿、可执行青；
-// 字符串品红、代码位 {…} 蓝、算子黄。
-func hl_render(cur: i64) -> (string, i64) {
-    var ESC = esc_s()
-    var C_RESET = ESC + "[0m"
-    var C_CMD = ESC + "[1;32m"
-    var C_EXE = ESC + "[36m"
-    var C_OP = ESC + "[33m"
-    var C_STR = ESC + "[35m"
-    var C_BRACE = ESC + "[34m"
-    var sb = string_builder()
-    var n = str_len(g_buf)
-    var i: i64 = 0
-    var col: i64 = 0
-    var cmd_pos = true
-    while i < n {
-        var c = str_char(g_buf, i)
-        if c == " " || c == "\t" {
-            sb_append(sb, c)
-            i = i + 1
-            continue
-        }
-        var opl = op_len_cp(g_buf, i)
-        if opl > 0 {
-            sb_append(sb, C_OP)
-            var oc0 = c
-            var q: i64 = 0
-            while q < opl {
-                var oc = str_char(g_buf, i)
-                sb_append(sb, oc)
-                if i < cur {
-                    col = col + ch_width(oc)
-                }
-                i = i + 1
-                q = q + 1
-            }
-            sb_append(sb, C_RESET)
-            if oc0 == "-" && opl == 2 {
-                cmd_pos = true
-            } else if oc0 == "&" || oc0 == "|" || oc0 == ";" {
-                cmd_pos = true
-            } else {
-                cmd_pos = false
-            }
-            continue
-        }
-        if c == "\"" || c == "'" {
-            var qch = c
-            sb_append(sb, C_STR)
-            sb_append(sb, c)
-            if i < cur {
-                col = col + ch_width(c)
-            }
-            i = i + 1
-            while i < n {
-                var sc = str_char(g_buf, i)
-                sb_append(sb, sc)
-                if i < cur {
-                    col = col + ch_width(sc)
-                }
-                i = i + 1
-                if sc == "\\" && qch == "\"" && i < n {
-                    var ec = str_char(g_buf, i)
-                    sb_append(sb, ec)
-                    if i < cur {
-                        col = col + ch_width(ec)
-                    }
-                    i = i + 1
-                    continue
-                }
-                if sc == qch {
-                    break
-                }
-            }
-            sb_append(sb, C_RESET)
-            cmd_pos = false
-            continue
-        }
-        if c == "{" {
-            var depth: i64 = 0
-            sb_append(sb, C_BRACE)
-            while i < n {
-                var bc = str_char(g_buf, i)
-                sb_append(sb, bc)
-                if i < cur {
-                    col = col + ch_width(bc)
-                }
-                i = i + 1
-                if bc == "{" {
-                    depth = depth + 1
-                } else if bc == "}" {
-                    depth = depth - 1
-                    if depth == 0 {
-                        break
-                    }
-                }
-            }
-            sb_append(sb, C_RESET)
-            cmd_pos = false
-            continue
-        }
-        // 词：扫到边界（空白/引号/花括号/算子）
-        var i0 = i
-        while i < n {
-            var wc = str_char(g_buf, i)
-            if wc == " " || wc == "\t" || wc == "\"" || wc == "'" || wc == "{" {
-                break
-            }
-            if op_len_cp(g_buf, i) > 0 {
-                break
-            }
-            i = i + 1
-        }
-        var word = sh_util.u_sub(g_buf, i0, i)
-        var wcmd = false
-        if cmd_pos {
-            if is_cmdword(word) {
-                sb_append(sb, C_CMD)
-                wcmd = true
-            } else if word_is_exe(word) {
-                sb_append(sb, C_EXE)
-                wcmd = true
-            }
-        }
-        var wj = i0
-        while wj < i {
-            var wch = str_char(g_buf, wj)
-            sb_append(sb, wch)
-            if wj < cur {
-                col = col + ch_width(wch)
-            }
-            wj = wj + 1
-        }
-        if wcmd {
-            sb_append(sb, C_RESET)
-        }
-        cmd_pos = false
-    }
-    return (sb_build(sb), col)
-}
-
-// VT 重绘：清行 → 提示符 + 高亮缓冲 → 清尾 → 光标归位；非 VT 降级朴素重绘。
+// VT 重绘：清行 → 提示符 + 高亮缓冲（command.hl_line 共享高亮）→ 清尾 → 光标归位；非 VT 降级朴素重绘。
 func draw(prompt: string) {
     hl_check()
     if g_vt && !g_hl_off {
@@ -597,7 +310,7 @@ func draw(prompt: string) {
         var pfx = sub(g_buf, 0, g_cur)
         print("\r" + esc_s() + "[K" + prompt + pfx)
         var c_mid = term.cursor_col()
-        var (hb, hcol) = hl_render(g_cur)
+        var (hb, hcol) = command.hl_line(g_buf, g_cur)
         print("\r" + esc_s() + "[K" + prompt + hb)
         if c_mid >= 0 {
             var c_end = term.cursor_col()
@@ -607,7 +320,7 @@ func draw(prompt: string) {
             }
         } else {
             print("\r")
-            print(esc_s() + "[" + to_string(str_width(prompt) + hcol) + "C")
+            print(esc_s() + "[" + to_string(sh_util.str_width(prompt) + hcol) + "C")
         }
     } else {
         print("\r" + prompt + g_buf)
