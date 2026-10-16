@@ -20,6 +20,7 @@ import "./srv.tie"
 
 func main() -> i64 {
     session.ss_load()
+    shlang.sl_init()
     var mode = run.rn_args()
     var m0 = mode[0]
     if m0 == "e" {
@@ -38,8 +39,12 @@ func main() -> i64 {
     }
     // interactive REPL（TTY ⇒ 行编辑器；非 TTY ⇒ 逐行直读降级）
     println("tshell 0.1 (p.9.3.1-5: 核心+会话+脚本运行时 + 帧协议 + observe 观测)")
+    var rc_out = run.rn_run_rc()
+    if rc_out != "" {
+        render.r_emit(rc_out)
+    }
     while !command.ex_req() {
-        var pr = "tie:" + command.prompt_dir() + "> "
+        var pr = shlang.prompt_prefix() + command.prompt_dir() + "> "
         if shlang.rc_last() != 0 {
             pr = "! " + pr
         }

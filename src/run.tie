@@ -2,6 +2,7 @@ type tie<logic>
 import "./sh_util.tie"
 import "./command.tie"
 import "./repl.tie"
+import "./session.tie"
 import "./backend_interp.tie"
 // src/run.tie —— 脚本运行时模块（L0，p.9.3.3）：-e / -f / 脚本 / shebang
 // --------------------------------------------------------------
@@ -54,6 +55,16 @@ func args_at(i: i64) -> string {
 }
 
 // 单行求值（-e "expr"）：交共享分派，返回输出文本。
+// rc 启动脚本（~/.tshell/rc.tie；tie 脚本形态）——REPL 前由宿主执行；
+// 用于会话变量/函数预置（别名走 config.td 的 alias.* 面）。无文件返回空串。
+pub func rn_run_rc() -> string {
+    var p = session.ss_home() + "/.tshell/rc.tie"
+    if !file_exists(p) {
+        return ""
+    }
+    return backend_interp.b_eval_script(file_read(p))
+}
+
 pub func rn_eval_expr(expr: string) -> string {
     return repl.repl_handle(expr)
 }

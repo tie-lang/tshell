@@ -32,6 +32,11 @@ struct LineRes {
 
 var g_rc_seen: bool = false   // 会话 rc 变量是否已声明（tiep 重声明 no-op 规避）
 var g_rc_last: i64 = 0        // 会话最近 rc（跨行；同步去重用）
+var g_alias_names: table<string> = []   // 别名（name/value 平行表；config.td 装载）
+var g_alias_values: table<string> = []
+var g_prompt_prefix: string = "tie:"    // 提示符前缀（config: prompt.prefix）
+var g_strict: bool = false              // 严格模式（config: strict=true；命令失败即中止）
+var g_alias_depth: i64 = 0              // 别名展开递归深度护栏
 
 namespace shlang {
 
@@ -520,6 +525,79 @@ pub func rc_last() -> i64 {
     return g_rc_last
 }
 
+// 提示符前缀（config: prompt.prefix；缺省 "tie:"）。
+pub func prompt_prefix() -> string {
+    return g_prompt_prefix
+}
+
+// 会话启动初始化（tsh_main 在 REPL 前调用）：装载 config.td 的别名/提示符/严格位。
+pub func sl_init() {
+    var cfg = session.ss_load_cfg()
+    reload_aliases(cfg)
+    var pp = session.ss_cfg_get(cfg, "prompt.prefix")
+    if len(pp) > 0 {
+        g_prompt_prefix = pp
+    }
+    var st = session.ss_cfg_get(cfg, "strict")
+    if st == "true" || st == "1" {
+        g_strict = true
+    }
+}
+
+// 从配置行装载别名（alias.name=value）。
+func reload_aliases(cfg: table<string>) {
+    g_alias_names = []
+    g_alias_values = []
+    for r in cfg {
+        if has_pref(r, "alias.") {
+            var eq = eq_at(r)
+            if eq > 6 {
+                table_push(g_alias_names, sh_util.u_sub(r, 6, eq))
+                table_push(g_alias_values, sh_util.u_sub(r, eq + 1, str_len(r)))
+            }
+        }
+    }
+}
+
+// 别名重载（alias 命令写入配置后调用）。
+pub func aliases_reload() {
+    reload_aliases(session.ss_load_cfg())
+}
+
+func eq_at(r: string) -> i64 {
+    var n = str_len(r)
+    var i: i64 = 0
+    while i < n {
+        if str_char(r, i) == "=" {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+func alias_lookup(name: string) -> string {
+    var i: i64 = 0
+    for nm in g_alias_names {
+        if nm == name {
+            return g_alias_values[i]
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// 严格模式守卫（config: strict=true）：命令失败即中止（供脚本/管道驱动使用）。
+// 覆盖 sl_run 的主要出口（含「无法启动」与语言语境失败路径）。
+func strict_apply(r: LineRes) -> LineRes {
+    if g_strict && r.rc != 0 {
+        command.ex_set(r.rc)
+        command.req_exit()
+        r.out = r.out + "\ntshell: 严格模式：命令失败（rc=" + to_string(r.rc) + "），中止"
+    }
+    return r
+}
+
 // 处理一行：返回结构化结果（text 为待渲染文本；rc 为最终退出码）。
 pub func sl_run(line: string) -> LineRes {
     var res = LineRes()
@@ -530,6 +608,16 @@ pub func sl_run(line: string) -> LineRes {
     var (tx, tk, tm) = lex_line(t)
     if len(tx) == 0 {
         return res
+    }
+    // 别名展开（首词为普通词；递归深度护栏）
+    if tk[0] == 0 && tm[0] == 0 && g_alias_depth < 8 {
+        var av = alias_lookup(tx[0])
+        if len(av) > 0 {
+            g_alias_depth = g_alias_depth + 1
+            var r3 = sl_run(av + reconstruct_rest(tx, tk, tm, 1))
+            g_alias_depth = g_alias_depth - 1
+            return r3
+        }
     }
     var k0 = tk[0]
     var forced_cmd = false
@@ -571,7 +659,7 @@ pub func sl_run(line: string) -> LineRes {
             if len(verr3) > 0 {
                 res.out = verr3
                 res.rc = 1
-                return res
+                return strict_apply(res)
             }
             res.out = vd3
             res.rc = 0
@@ -587,7 +675,7 @@ pub func sl_run(line: string) -> LineRes {
         if len(verr2) > 0 {
             res.out = lang_fail_diag(tx, verr2)
             res.rc = 1
-            return res
+            return strict_apply(res)
         }
         if has_pref(vd2, "已定义") {
             vd2 = ""
@@ -596,7 +684,7 @@ pub func sl_run(line: string) -> LineRes {
         res.rc = 0
         return res
     }
-    return run_command(tx, tk, tm, start)
+    return strict_apply(run_command(tx, tk, tm, start))
 }
 
 // 语言语境失败诊断：首词像命令却求值失败 ⇒ 命令未找到（含检索结论与纠错）；
@@ -666,6 +754,31 @@ func resolve_words(ws: table<string>, cs: table<i64>) -> (table<string>, string)
     return (out, "")
 }
 
+// 从 tok 序列 from 起重建成行（别名展开用；代码位重包花括号、引号词重包引号）。
+func reconstruct_rest(tx: table<string>, tk: table<i64>, tm: table<i64>, from: i64) -> string {
+    var out = ""
+    var i = from
+    while i < len(tx) {
+        var piece = ""
+        if tk[i] == 0 {
+            if tm[i] == 1 {
+                piece = "{" + tx[i] + "}"
+            } else if tm[i] == 2 {
+                piece = tx[i]
+            } else if (tm[i] & 4) != 0 {
+                piece = "\"" + tx[i] + "\""
+            } else {
+                piece = tx[i]
+            }
+        } else {
+            piece = op_text(tk[i])
+        }
+        out = out + " " + piece
+        i = i + 1
+    }
+    return out
+}
+
 // 字节包含判定。
 func has_byte(s: string, b: i64) -> bool {
     var i: i64 = 0
@@ -704,6 +817,29 @@ func run_command(tx: table<string>, tk: table<i64>, tm: table<i64>, start: i64) 
     while i < n {
         var kd = tk[i]
         if kd == 0 {
+            // 传统重定向记号的可操作提示（§5.4；引号词/代码位不误报）
+            if tm[i] == 0 && len(seg_w) > 0 {
+                if tx[i] == ">" {
+                    res.out = "tshell: 检测到 '>'——重定向请用 '->'（覆盖）或 '->>'（追加）；数据流向右侧"
+                    res.rc = 2
+                    return res
+                }
+                if tx[i] == ">>" {
+                    res.out = "tshell: 检测到 '>>'——追加重定向请用 '->>'"
+                    res.rc = 2
+                    return res
+                }
+                if tx[i] == "<" {
+                    res.out = "tshell: 检测到 '<'——输入请用 '<-'（文件内容作 stdin）"
+                    res.rc = 2
+                    return res
+                }
+                if tx[i] == "2>" {
+                    res.out = "tshell: 检测到 '2>'——stderr 重定向请用 '2->'（文件或 stdout 合流）"
+                    res.rc = 2
+                    return res
+                }
+            }
             table_push(seg_w, tx[i])
             if tm[i] == 1 || tm[i] == 2 {
                 table_push(seg_c, 1)  // 标记待求值（代码位 / h 插值）
@@ -903,6 +1039,12 @@ func run_command(tx: table<string>, tk: table<i64>, tm: table<i64>, start: i64) 
                 }
                 // 段类型：内建 / 谓词 / 外部
                 var head = rw[0]
+                // alias 命令（壳级；配置持久 + 即时装载）
+                if head == "alias" && k3 == v {
+                    res.out = alias_cmd(rw)
+                    res.rc = 0
+                    return res
+                }
                 var is_builtin = command.c_is_builtin(head)
                 var is_pred = head == "filter" || head == "count" || head == "parse"
                 if is_builtin || is_pred {
@@ -1043,6 +1185,46 @@ func run_command(tx: table<string>, tk: table<i64>, tm: table<i64>, start: i64) 
         res.out = "tshell: 退出码 " + to_string(res.rc)
     }
     return res
+}
+
+// alias 命令：无参列出；`alias name=value`（或 name value…）定义并持久。
+func alias_cmd(args: table<string>) -> string {
+    if len(args) <= 1 {
+        if len(g_alias_names) == 0 {
+            return "（无别名；用法: alias name=value —— 例: alias ll=ls src）"
+        }
+        var out2 = ""
+        var i: i64 = 0
+        for nm in g_alias_names {
+            out2 = out2 + "alias " + nm + "=" + g_alias_values[i] + "\n"
+            i = i + 1
+        }
+        return sh_util.u_trim(out2)
+    }
+    // name=value 或 name value…
+    var joined = ""
+    var j: i64 = 1
+    while j < len(args) {
+        if j > 1 {
+            joined = joined + " "
+        }
+        joined = joined + args[j]
+        j = j + 1
+    }
+    var eq = eq_at(joined)
+    if eq <= 0 {
+        return "alias: 用法: alias name=value（例: alias ll=ls src）"
+    }
+    var name = sh_util.u_sub(joined, 0, eq)
+    var value = sh_util.u_trim(sh_util.u_sub(joined, eq + 1, str_len(joined)))
+    if len(value) == 0 {
+        return "alias: 值不能为空"
+    }
+    var cfg = session.ss_load_cfg()
+    var cfg2 = session.ss_alias(cfg, name, value)
+    session.ss_save_cfg(cfg2)
+    aliases_reload()
+    return "alias " + name + "=" + value
 }
 
 // ---- 谓词：filter（逐行绑定 x 求值谓词体，真则保留） ----
