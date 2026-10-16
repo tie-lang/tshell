@@ -54,6 +54,37 @@ func args_at(i: i64) -> string {
     return arg_string(i)
 }
 
+// tie 风格 argv 注入（§3.2 特殊变量；argv[0]=脚本路径，[1..]=参数）。
+func inject_argv(path: string, sargs: table<string>) {
+    var lit = "var argv = [\"" + esc_lit(path) + "\""
+    for a in sargs {
+        lit = lit + ", \"" + esc_lit(a) + "\""
+    }
+    lit = lit + "]"
+    var _r = backend_interp.b_eval(lit)
+}
+
+// tie 字符串字面量转义（\ " 换行）。
+func esc_lit(s: string) -> string {
+    var out = ""
+    var n = str_len(s)
+    var i: i64 = 0
+    while i < n {
+        var c = str_char(s, i)
+        if c == "\\" {
+            out = out + "\\\\"
+        } else if c == "\"" {
+            out = out + "\\\""
+        } else if c == "\n" {
+            out = out + "\\n"
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out
+}
+
 // 单行求值（-e "expr"）：交共享分派，返回输出文本。
 // rc 启动脚本（~/.tshell/rc.tie；tie 脚本形态）——REPL 前由宿主执行；
 // 用于会话变量/函数预置（别名走 config.td 的 alias.* 面）。无文件返回空串。
@@ -101,6 +132,9 @@ pub func rn_run_script(path: string) -> i64 {
         ai = ai + 1
     }
     backend_interp.b_set_script_args(sargs)
+    // 注入 tie 风格 argv（§3.2 特殊变量：argv[0]=脚本路径，[1..]=参数；{
+    // 脚本内 argv[1] / h"…{argv[1]}…" 可读）。
+    inject_argv(path, sargs)
     // 顶层裸 `exit [N]`（旧式命令形）归一化为 `exit(N)` 表达式形——全文件求值时
     // `exit 7` 非合法 tie 语法；新契约统一为 `exit(n)`。父表达式形 exit(...) 原样透传。
     content = normalize_exit_calls(content)
