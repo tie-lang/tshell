@@ -329,13 +329,47 @@ func draw(prompt: string) {
 
 // ---- Ctrl-R 历史反搜（2026-10-16 深化） ----
 
-// 反搜显示行（单次写：整行原子输出，避免多段写交错）。
+// 子串位置（码点索引；-1 无）。byte 级滑窗。
+func find_sub(hay: string, needle: string) -> i64 {
+    var hn = str_len(hay)
+    var nn = str_len(needle)
+    if nn == 0 || nn > hn {
+        return -1
+    }
+    var i: i64 = 0
+    while i + nn <= hn {
+        var j: i64 = 0
+        var ok = true
+        while j < nn {
+            if str_char(hay, i + j) != str_char(needle, j) {
+                ok = false
+                break
+            }
+            j = j + 1
+        }
+        if ok {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// 反搜显示行（单次写；命中段高亮——匹配处亮绿加粗，其余常态）。
 func redraw_search(pat: string, hit: string) {
     var line = "\r"
     if g_vt {
         line = line + esc_s() + "[K"
     }
-    print(line + "(反搜)" + pat + ": " + hit)
+    var shown = hit
+    var idx = find_sub(hit, pat)
+    if idx >= 0 {
+        var pre = sh_util.u_sub(hit, 0, idx)
+        var mid = sh_util.u_sub(hit, idx, idx + str_len(pat))
+        var post = sh_util.u_sub(hit, idx + str_len(pat), str_len(hit))
+        shown = pre + command.u_c("1;32", mid) + post
+    }
+    print(line + "(反搜)" + pat + ": " + shown)
 }
 
 // 自 from（不含）向更旧找含 pat 的历史行 → (行, 下标)；无命中 ("", -1)。
@@ -507,6 +541,37 @@ pub func le_read(prompt: string) -> string {
     return le_read_pre(prompt, "")
 }
 
+// 光标处的引号态（0 无 / 34 双引号 / 39 单引号；双引号内 \ 转义跳过）。
+func quote_state_at(cur: i64) -> i64 {
+    var q: i64 = 0
+    var i: i64 = 0
+    var n = str_len(g_buf)
+    while i < cur && i < n {
+        var c = str_char(g_buf, i)
+        if q == 0 {
+            if c == "\"" {
+                q = 34
+            } else if c == "'" {
+                q = 39
+            }
+        } else if q == 39 {
+            if c == "'" {
+                q = 0
+            }
+        } else {
+            if c == "\\" {
+                i = i + 2
+                continue
+            }
+            if c == "\"" {
+                q = 0
+            }
+        }
+        i = i + 1
+    }
+    return q
+}
+
 // 带前置累积文本的读取：续行平衡按「前缀 + 本段」整体判定。
 pub func le_read_pre(prompt: string, pre: string) -> string {
     g_vt = term.vt_on()
@@ -641,6 +706,12 @@ pub func le_read_pre(prompt: string, pre: string) -> string {
                     draw(prompt)
                     continue
                 }
+            }
+            // 引号内：不自动配对（`(` `{` `'` 在串内是字面；引号则用于闭串/字面）
+            if quote_state_at(cur2) != 0 {
+                le_insert(ch)
+                draw(prompt)
+                continue
             }
             var pairr = ""
             if ch == "(" {
