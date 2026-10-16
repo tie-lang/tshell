@@ -25,6 +25,8 @@ var g_cur: i64 = 0          // 光标在 buffer 中的位置（码点索引）
 var g_hist_idx: i64 = 0     // 当前历史游标（-1 = 不在历史回放中）
 var g_hist_now: string = "" // 进入历史回放时的原始输入缓存
 var g_vt: bool = false        // VT 可用（le_read 探测；不可用则降级朴素渲染）
+var g_ml_rows: i64 = 0        // 上次渲染占用的行数（0=无区域；多行视图用）
+var g_ml_cline: i64 = 0       // 上次渲染后光标所在行（区域归位基准）
 var g_hl_off: bool = false    // config: ui.hl=false ⇒ 关闭高亮与两遍实测渲染（朴素重绘安全阀）
 var g_hl_load: bool = false   // 配置读取一次性标记
 
@@ -163,6 +165,8 @@ pub func le_hist_down(hist: table<string>) {
 pub func le_accept() -> string {
     var line = g_buf
     le_reset()
+    g_ml_rows = 0
+    g_ml_cline = 0
     return line
 }
 
@@ -300,15 +304,189 @@ func common_prefix(cs: table<string>) -> string {
     return pre
 }
 
+// ---- 多行编辑视图（续行不再分段递归；缓冲含 \n 时启用） ----
+
+// 缓冲是否含换行。
+func has_nl() -> bool {
+    var n = str_len(g_buf)
+    var i: i64 = 0
+    while i < n {
+        if str_char(g_buf, i) == "\n" {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// 行拆分：返回 (行文本表, 每行起始索引表)。
+func ml_lines() -> (table<string>, table<i64>) {
+    var lines: table<string> = []
+    var starts: table<i64> = []
+    var n = str_len(g_buf)
+    var cl = ""
+    var i: i64 = 0
+    table_push(starts, 0)
+    while i < n {
+        var c = str_char(g_buf, i)
+        if c == "\n" {
+            table_push(lines, cl)
+            cl = ""
+            table_push(starts, i + 1)
+        } else {
+            cl = cl + c
+        }
+        i = i + 1
+    }
+    table_push(lines, cl)
+    return (lines, starts)
+}
+
+// 光标所在行定位：返回 (行号, 行起始, 行长)。
+func ml_locate() -> (i64, i64, i64) {
+    var n = str_len(g_buf)
+    var cl: i64 = 0
+    var st: i64 = 0
+    var i: i64 = 0
+    while i < n {
+        var c = str_char(g_buf, i)
+        if c == "\n" {
+            if g_cur <= i {
+                return (cl, st, i - st)
+            }
+            cl = cl + 1
+            st = i + 1
+        }
+        i = i + 1
+    }
+    return (cl, st, n - st)
+}
+
+// 行前缀：行 0 = 提示符；续行 = `....> `。
+func ml_pref(i: i64, prompt: string) -> string {
+    if i == 0 {
+        return prompt
+    }
+    return "....> "
+}
+
+// 区域归位：光标行按记录上移 + 清屏至底（REPL 输入区下方恒空，[J 安全）。
+func ml_area_reset() {
+    print("\r")
+    if g_ml_cline > 0 {
+        print(esc_s() + "[" + to_string(g_ml_cline) + "A")
+    }
+    print(esc_s() + "[J")
+}
+
+// 光标移至区域末行行首（提交/反搜/清行前调用）。
+func ml_bottom() {
+    print("\r")
+    var n = g_ml_rows - 1 - g_ml_cline
+    if n > 0 {
+        print(esc_s() + "[" + to_string(n) + "B")
+    }
+    if g_ml_rows > 0 {
+        g_ml_cline = g_ml_rows - 1
+    }
+}
+
+// 多行重绘（两遍实测：遍1 量光标实际列，遍2 完整高亮渲染后定位）。
+func draw_ml(prompt: string) {
+    var (lines, starts) = ml_lines()
+    var nlines = len(lines)
+    var (cl, st, ln) = ml_locate()
+    var col = g_cur - st
+    if col < 0 {
+        col = 0
+    }
+    if col > ln {
+        col = ln
+    }
+    // 遍1（测量）
+    ml_area_reset()
+    var li: i64 = 0
+    while li < cl {
+        print(ml_pref(li, prompt) + lines[li] + "\r\n")
+        li = li + 1
+    }
+    print(ml_pref(cl, prompt) + sh_util.u_sub(lines[cl], 0, col))
+    var c_target = term.cursor_col()
+    // 遍2（正式）
+    print("\r")
+    if cl > 0 {
+        print(esc_s() + "[" + to_string(cl) + "A")
+    }
+    print(esc_s() + "[J")
+    var lj: i64 = 0
+    while lj < nlines {
+        var (hseg, _hc) = command.hl_line(lines[lj], -1)
+        if lj < nlines - 1 {
+            print(ml_pref(lj, prompt) + hseg + "\r\n")
+        } else {
+            print(ml_pref(lj, prompt) + hseg)
+        }
+        lj = lj + 1
+    }
+    // 定位 (cl, c_target)
+    var upn = nlines - 1 - cl
+    if upn > 0 {
+        print(esc_s() + "[" + to_string(upn) + "A")
+    }
+    if c_target >= 0 {
+        print("\r")
+        if c_target > 0 {
+            print(esc_s() + "[" + to_string(c_target) + "C")
+        }
+    } else {
+        var mcol = sh_util.str_width(ml_pref(cl, prompt)) + sh_util.str_width(sh_util.u_sub(lines[cl], 0, col))
+        print("\r")
+        if mcol > 0 {
+            print(esc_s() + "[" + to_string(mcol) + "C")
+        }
+    }
+    g_ml_rows = nlines
+    g_ml_cline = cl
+}
+
+// 行间移动（dir=-1 上 / 1 下；列保持、超长夹取）。
+func ml_move(dir: i64) {
+    var (lines, starts) = ml_lines()
+    var nlines = len(lines)
+    var (cl, st, ln) = ml_locate()
+    var col = g_cur - st
+    if col < 0 {
+        col = 0
+    }
+    if col > ln {
+        col = ln
+    }
+    var tl = cl + dir
+    if tl < 0 || tl >= nlines {
+        return
+    }
+    var tmax = str_len(lines[tl])
+    var ncol = col
+    if ncol > tmax {
+        ncol = tmax
+    }
+    le_set(g_buf, starts[tl] + ncol)
+}
+
 // VT 重绘：清行 → 提示符 + 高亮缓冲（command.hl_line 共享高亮）→ 清尾 → 光标归位；非 VT 降级朴素重绘。
 func draw(prompt: string) {
     hl_check()
     if g_vt && !g_hl_off {
-        // 实测定位（与字体/控制台字形宽度无关）：
+        if has_nl() {
+            draw_ml(prompt)
+            return
+        }
+        // 单行实测定位（与字体/控制台字形宽度无关）：
         // 遍1 明色前缀 → 量 c_mid；遍2 完整高亮 → 量 c_end；
         // 左移 (c_end - c_mid) 精确落回前缀末。控制台不可查（posix）时回退模型列。
+        ml_area_reset()
         var pfx = sub(g_buf, 0, g_cur)
-        print("\r" + esc_s() + "[K" + prompt + pfx)
+        print(prompt + pfx)
         var c_mid = term.cursor_col()
         var (hb, hcol) = command.hl_line(g_buf, g_cur)
         print("\r" + esc_s() + "[K" + prompt + hb)
@@ -322,6 +500,8 @@ func draw(prompt: string) {
             print("\r")
             print(esc_s() + "[" + to_string(sh_util.str_width(prompt) + hcol) + "C")
         }
+        g_ml_rows = 1
+        g_ml_cline = 0
     } else {
         print("\r" + prompt + g_buf)
     }
@@ -581,43 +761,47 @@ pub func le_read_pre(prompt: string, pre: string) -> string {
     draw(prompt)
     while true {
         var k = term.key_read()
-        if k == 13 || k == 10 {
-            var line0 = g_buf
-            print("\r\n")
-            var whole = line0
-            if len(pre) > 0 {
-                whole = pre + "\n" + line0
+        if k == 13 || k == 10 {  // 回车：平衡即提交；否则追加续行（多行视图内继续编辑）
+            if shlang.line_balanced(g_buf) {
+                ml_bottom()
+                print("\r\n")
+                return le_accept()
             }
-            if !shlang.line_balanced(whole) {
-                var more = le_read_pre("....> ", whole)
-                le_reset()
-                return line0 + "\n" + more
-            }
-            return le_accept()
+            le_set(g_buf + "\n", str_len(g_buf) + 1)
+            draw(prompt)
+            continue
         }
-        if k == 18 {  // Ctrl-R：历史反搜（接受的行按回车提交路径处理）
+        if k == 18 {  // Ctrl-R：历史反搜（先归位到区域末行；接受的行按回车提交路径）
+            if g_vt {
+                ml_bottom()
+            }
             var (mline, mok) = hist_search(hist)
             if mok {
                 le_set(mline, str_len(mline))
-                var line0b = g_buf
-                print("\r\n")
-                var wholeb = line0b
-                if len(pre) > 0 {
-                    wholeb = pre + "\n" + line0b
+                if shlang.line_balanced(g_buf) {
+                    print("\r\n")
+                    return le_accept()
                 }
-                if !shlang.line_balanced(wholeb) {
-                    var moreb = le_read_pre("....> ", wholeb)
-                    le_reset()
-                    return line0b + "\n" + moreb
-                }
-                return le_accept()
+                le_set(g_buf + "\n", str_len(g_buf) + 1)
+                draw(prompt)
+                continue
             }
             draw(prompt)
             continue
         }
-        if k == 3 {  // Ctrl-C：清行
+        if k == 3 {  // Ctrl-C：清行（先归位末行，再整区清理）
+            if g_vt {
+                ml_bottom()
+            }
             print("^C\r\n")
+            if g_vt && g_ml_rows > 1 {
+                print("\r")
+                print(esc_s() + "[" + to_string(g_ml_rows) + "A")
+                print(esc_s() + "[J")
+            }
             le_reset()
+            g_ml_rows = 0
+            g_ml_cline = 0
             draw(prompt)
             continue
         }
@@ -667,23 +851,41 @@ pub func le_read_pre(prompt: string, pre: string) -> string {
             draw(prompt)
             continue
         }
-        if k == -5 {  // Home
-            le_home()
+        if k == -5 {  // Home：多行=行首；否则全缓冲首
+            if has_nl() {
+                var (_hcl, hst, _hln) = ml_locate()
+                le_set(g_buf, hst)
+            } else {
+                le_home()
+            }
             draw(prompt)
             continue
         }
-        if k == -6 {  // End
-            le_end()
+        if k == -6 {  // End：多行=行尾；否则全缓冲尾
+            if has_nl() {
+                var (_ecl, est, eln) = ml_locate()
+                le_set(g_buf, est + eln)
+            } else {
+                le_end()
+            }
             draw(prompt)
             continue
         }
-        if k == -1 {  // Up：历史
-            le_hist_up(hist)
+        if k == -1 {  // Up：多行内上移；否则历史
+            if has_nl() {
+                ml_move(-1)
+            } else {
+                le_hist_up(hist)
+            }
             draw(prompt)
             continue
         }
-        if k == -2 {  // Down：历史
-            le_hist_down(hist)
+        if k == -2 {  // Down：多行内下移；否则历史
+            if has_nl() {
+                ml_move(1)
+            } else {
+                le_hist_down(hist)
+            }
             draw(prompt)
             continue
         }
